@@ -4,10 +4,10 @@ function Invoke-SqliteQuery {
         Runs a SQL statement against either a fresh connection (-DataSource) or a caller-held
         open connection (-SQLiteConnection), returning rows as PSCustomObjects.
     .DESCRIPTION
-        Same call shape the storage layer already used against PSSQLite (-DataSource/
-        -SQLiteConnection/-Query/-SqlParameters), backed instead by the direct libsqlite3
-        P/Invoke wrapper in New-SQLiteConnection.ps1 - Get-Blob.ps1/Put-Blob.ps1/Remove-Blob.ps1/
-        Get-BlobMetadataList.ps1/Initialize-StrongboxSyncDatabase.ps1 needed no changes.
+        -DataSource opens and closes its own connection for the call; -SQLiteConnection reuses a
+        connection the caller already holds open (Put-Blob.ps1 uses this to keep several calls
+        inside one BEGIN IMMEDIATE/COMMIT transaction). Backed by the libsqlite3 P/Invoke wrapper
+        in New-SQLiteConnection.ps1.
     #>
     param(
         [string] $DataSource,

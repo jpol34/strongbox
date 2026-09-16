@@ -4,7 +4,7 @@ ARG TARGETARCH
 ARG PWSH_VERSION=7.4.6
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl libicu72 libsqlite3-0 \
+        ca-certificates curl libicu72 libsqlite3-0 liblttng-ust1 \
     && case "$TARGETARCH" in \
         amd64) PWSH_ARCH=x64 ;; \
         arm64) PWSH_ARCH=arm64 ;; \

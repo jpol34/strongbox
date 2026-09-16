@@ -1,5 +1,6 @@
 if (-not ([System.Management.Automation.PSTypeName] 'Strongbox.Sqlite.Helper').Type) {
-    Add-Type -TypeDefinition @'
+    try {
+        Add-Type -TypeDefinition @'
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -92,6 +93,11 @@ namespace Strongbox.Sqlite
                 if (db != IntPtr.Zero) { Native.sqlite3_close(db); }
                 throw new InvalidOperationException("sqlite3_open failed: " + msg);
             }
+            // busy_timeout is a per-connection setting (not persisted in the DB file), so every
+            // connection needs it, not just the one Initialize-StrongboxSyncDatabase opens for the
+            // startup PRAGMA - otherwise a second writer hits SQLITE_BUSY immediately instead of
+            // waiting for Put-Blob's BEGIN IMMEDIATE to commit.
+            ExecuteNonQuery(db, "PRAGMA busy_timeout = 5000;");
             return db;
         }
 
@@ -149,7 +155,10 @@ namespace Strongbox.Sqlite
                     {
                         string paramName = "@" + entry.Key;
                         int idx = Native.sqlite3_bind_parameter_index(stmt, paramName);
-                        if (idx == 0) { continue; }
+                        if (idx == 0)
+                        {
+                            throw new InvalidOperationException("No placeholder '" + paramName + "' found in query: " + sql);
+                        }
                         object value = entry.Value;
                         if (value == null)
                         {
@@ -195,6 +204,12 @@ namespace Strongbox.Sqlite
     }
 }
 '@
+    } catch {
+        # Pode's runspace pool imports this module into several runspaces, possibly concurrently,
+        # so two of them can both see the type missing and both call Add-Type - the loser's
+        # "type already exists" is expected and safe to ignore; anything else isn't.
+        if (-not ([System.Management.Automation.PSTypeName] 'Strongbox.Sqlite.Helper').Type) { throw }
+    }
 }
 
 function New-SQLiteConnection {
