@@ -1,0 +1,8 @@
+migration/*.csv
+ui/.token
+ui/audit.log
+
+# Real manifest documents your own vault's internal topology (system names, hostnames, client
+# names, etc.) even though it never contains secret values - keep it local-only. Commit
+# manifest.example.json instead.
+manifest.json

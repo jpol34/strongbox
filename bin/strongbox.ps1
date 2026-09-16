@@ -1,0 +1,223 @@
+#Requires -Version 7.0
+<#
+.SYNOPSIS
+    Strongbox CLI - a subcommand wrapper over the Strongbox PowerShell module's functions.
+.DESCRIPTION
+    Pure presentation layer: every subcommand here is a thin call into an already-tested module
+    function (Strongbox\Public\*.ps1) - no new vault/manifest logic lives in this file.
+#>
+param(
+    [Parameter(Position = 0)] [string] $Command,
+    [Parameter(Position = 1, ValueFromRemainingArguments)] [string[]] $Rest = @()
+)
+$ErrorActionPreference = 'Stop'
+
+try {
+    Import-Module Strongbox -ErrorAction Stop
+} catch {
+    Import-Module (Join-Path $PSScriptRoot '..\Strongbox\Strongbox.psd1') -ErrorAction Stop
+}
+
+function Show-Usage {
+    @'
+strongbox <command> [args]
+
+  list [--json]                    List every tracked secret (name/owner/purpose/rotation/stale)
+  stale [--json]                   List only secrets past their rotation policy
+  check                            Drift check: manifest vs. vault
+
+  get <name> [--real]               Print a secret's value to stdout (for scripting/piping)
+  set <name> <value> [--rotation-days N] [--owner X]
+                                    Write a secret
+  remove <name> [--force]           Delete a secret (prompts for confirmation unless --force)
+  reveal <name> [--stdout] [--real] Copy a secret to the clipboard (auto-clears after 30s);
+                                    --stdout prints it instead, for cases where you truly need
+                                    that (accepts the same exposure tradeoff -reveal in the web
+                                    UI/browser copy button already accepts)
+
+  'get'/'reveal' refuse to output anything but tools.StrongboxSelfTest (a permanent, harmless
+  sandbox value - always fine to touch) when run non-interactively (no real terminal attached -
+  e.g. from a script or an AI agent's tool calls) unless you pass --real. A human typing at a
+  real interactive prompt never sees this gate.
+
+  backup export <path>             Back up manifest + every secret value to an encrypted file
+                                    (prompts for a passphrase - never pass it as an argument,
+                                    that would land in shell history and process-list args)
+  backup import <path> [--force]   Restore from a backup file (prompts for the passphrase)
+
+  serve start                      Start the web UI server (idempotent - safe if already running)
+  serve stop                       Stop it, if running
+  serve status                     Show whether it's running and its URL
+
+  help                              Show this text
+'@ | Write-Host
+}
+
+$script:SandboxSecretName = 'tools.StrongboxSelfTest'
+
+function Test-InteractiveTerminal {
+    -not ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected)
+}
+
+function Assert-RevealAllowed {
+    <#
+    Prevents a script or automated agent from grabbing a real secret when it's only trying to
+    verify a command works. The sandbox secret is always safe to touch; anything else requires
+    either a real interactive terminal (a human consciously typing this) or an explicit --real
+    flag.
+    #>
+    param([string] $Name, [string[]] $ArgList)
+    if ($Name -eq $script:SandboxSecretName) { return }
+    if (Test-InteractiveTerminal) { return }
+    if ($ArgList -contains '--real') { return }
+    throw "Refusing to reveal '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+}
+
+function Find-StrongboxServerProcess {
+    foreach ($port in 443, 80) {
+        $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
+            Where-Object LocalAddress -eq '127.0.0.1' | Select-Object -First 1
+        if ($conn) {
+            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+            return [pscustomobject]@{ Port = $port; Process = $proc }
+        }
+    }
+    return $null
+}
+
+function ConvertTo-DisplayTable {
+    param($InputObject)
+    $InputObject | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
+}
+
+function Set-ClipboardWithAutoClear {
+    param([string] $Value, [int] $ClearAfterSeconds = 30)
+    Set-Clipboard -Value $Value
+    Write-Host "Copied to clipboard (clears in ${ClearAfterSeconds}s - best-effort: won't fire if you close this shell first)."
+    Start-ThreadJob -ScriptBlock {
+        param($Expected, $Delay)
+        Start-Sleep -Seconds $Delay
+        try {
+            if ((Get-Clipboard -Raw -ErrorAction SilentlyContinue) -eq $Expected) {
+                Set-Clipboard -Value ''
+            }
+        } catch { }
+    } -ArgumentList $Value, $ClearAfterSeconds | Out-Null
+}
+
+switch ($Command) {
+    'list' {
+        $json = $Rest -contains '--json'
+        $result = Get-StrongboxSecretList
+        if ($json) { $result | ConvertTo-Json -Depth 4 } else { ConvertTo-DisplayTable $result }
+    }
+    'stale' {
+        $json = $Rest -contains '--json'
+        $result = Get-StrongboxStaleSecrets
+        if ($json) { $result | ConvertTo-Json -Depth 4 } else { ConvertTo-DisplayTable $result }
+    }
+    'check' {
+        Test-Strongbox
+    }
+    'get' {
+        $name = $Rest[0]
+        if (-not $name) { throw "Usage: strongbox get <name> [--real]" }
+        Assert-RevealAllowed -Name $name -ArgList $Rest
+        Get-StrongboxSecret -Name $name
+    }
+    'set' {
+        $name = $Rest[0]
+        $value = $Rest[1]
+        if (-not $name -or -not $value) { throw "Usage: strongbox set <name> <value> [--rotation-days N] [--owner X]" }
+        $params = @{ Name = $name; Value = $value }
+        $rdIdx = [array]::IndexOf($Rest, '--rotation-days')
+        if ($rdIdx -ge 0 -and $Rest.Count -gt $rdIdx + 1) { $params.RotationDays = [int]$Rest[$rdIdx + 1] }
+        $ownerIdx = [array]::IndexOf($Rest, '--owner')
+        if ($ownerIdx -ge 0 -and $Rest.Count -gt $ownerIdx + 1) { $params.Owner = $Rest[$ownerIdx + 1] }
+        Set-StrongboxSecret @params
+        Write-Host "Set '$name'."
+    }
+    'remove' {
+        $name = $Rest[0]
+        if (-not $name) { throw "Usage: strongbox remove <name> [--force]" }
+        $force = $Rest -contains '--force'
+        if (-not $force) {
+            $confirm = Read-Host "Delete '$name'? Type the name again to confirm"
+            if ($confirm -ne $name) { Write-Host "Cancelled."; return }
+        }
+        Remove-StrongboxSecret -Name $name
+        Write-Host "Removed '$name'."
+    }
+    'reveal' {
+        $name = $Rest[0]
+        if (-not $name) { throw "Usage: strongbox reveal <name> [--stdout] [--real]" }
+        Assert-RevealAllowed -Name $name -ArgList $Rest
+        $value = Get-StrongboxSecret -Name $name
+        if ($Rest -contains '--stdout') { $value } else { Set-ClipboardWithAutoClear -Value $value }
+    }
+    'backup' {
+        $sub = $Rest[0]
+        $path = $Rest[1]
+        if (-not $path) { throw "Usage: strongbox backup export|import <path> [--force]" }
+        $pass = Read-Host -AsSecureString "Passphrase"
+        switch ($sub) {
+            'export' { Export-StrongboxBackup -Path $path -Passphrase $pass }
+            'import' {
+                $force = $Rest -contains '--force'
+                Import-StrongboxBackup -Path $path -Passphrase $pass -Force:$force
+            }
+            default { throw "Usage: strongbox backup export|import <path> [--force]" }
+        }
+    }
+    'serve' {
+        $sub = $Rest[0]
+        switch ($sub) {
+            'start' {
+                $existing = Find-StrongboxServerProcess
+                if ($existing) {
+                    Write-Host "Already running on port $($existing.Port) (PID $($existing.Process.Id))."
+                    return
+                }
+                $uiScript = (Resolve-Path (Join-Path $PSScriptRoot '..\ui\Start-StrongboxUi.ps1')).Path
+                Start-Process pwsh -ArgumentList '-NoProfile', '-File', $uiScript -WindowStyle Hidden
+                # The Pode server takes a couple seconds to bind - poll rather than assume.
+                $found = $null
+                for ($i = 0; $i -lt 10 -and -not $found; $i++) {
+                    Start-Sleep -Seconds 1
+                    $found = Find-StrongboxServerProcess
+                }
+                if ($found) {
+                    $scheme = if ($found.Port -eq 443) { 'https' } else { 'http' }
+                    Write-Host "Started on $scheme`://strongbox.local (PID $($found.Process.Id))."
+                } else {
+                    Write-Host "Started, but couldn't confirm it's listening yet - check 'strongbox serve status' shortly." -ForegroundColor Yellow
+                }
+            }
+            'stop' {
+                $existing = Find-StrongboxServerProcess
+                if (-not $existing) { Write-Host "Not running."; return }
+                if ($existing.Process.ProcessName -ne 'pwsh') {
+                    Write-Host "Port $($existing.Port) is held by $($existing.Process.ProcessName) (PID $($existing.Process.Id)), not a pwsh process - not stopping something that might not be Strongbox." -ForegroundColor Yellow
+                    return
+                }
+                Stop-Process -Id $existing.Process.Id -Force
+                Write-Host "Stopped (was PID $($existing.Process.Id) on port $($existing.Port))."
+            }
+            'status' {
+                $existing = Find-StrongboxServerProcess
+                if (-not $existing) { Write-Host "Not running."; return }
+                $scheme = if ($existing.Port -eq 443) { 'https' } else { 'http' }
+                Write-Host "Running on $scheme`://strongbox.local (PID $($existing.Process.Id), port $($existing.Port))."
+            }
+            default { throw "Usage: strongbox serve start|stop|status" }
+        }
+    }
+    { $_ -in $null, '', 'help', '-h', '--help' } {
+        Show-Usage
+    }
+    default {
+        Write-Host "Unknown command: $Command" -ForegroundColor Red
+        Show-Usage
+        exit 1
+    }
+}

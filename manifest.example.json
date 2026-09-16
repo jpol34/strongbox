@@ -1,0 +1,65 @@
+[
+  {
+    "oldName": "ExampleSqlDb_ConnectionString",
+    "newName": "myapp.SqlDb_ConnectionString",
+    "usedBy": [
+      "setup-secrets.ps1 -> ConnectionStrings:MyApp",
+      "worker-service launcher"
+    ],
+    "purpose": "Primary application database, read/write login",
+    "rotationDays": 180,
+    "status": "keep"
+  },
+  {
+    "oldName": "ExampleApi_ReadonlyKey",
+    "newName": "myapp.Api_ReadonlyKey",
+    "usedBy": [
+      "reporting MCP only"
+    ],
+    "purpose": "Read-only API key for the reporting integration",
+    "status": "keep"
+  },
+  {
+    "oldName": "ExampleThirdParty_ApiKey",
+    "newName": "vendor.ThirdParty_ApiKey",
+    "usedBy": [
+      "worker-service (fanned out to ThirdParty__Accounts__N__Field)"
+    ],
+    "purpose": "JSON array of third-party provider account objects",
+    "rotationDays": 90,
+    "status": "keep"
+  },
+  {
+    "oldName": "ExampleCiToken",
+    "newName": "tools.GitHub_Pat",
+    "usedBy": [
+      "Claude Code GitHub MCP (headersHelper)"
+    ],
+    "purpose": "GitHub Personal Access Token",
+    "status": "keep"
+  },
+  {
+    "oldName": "ExampleVmLogin_User",
+    "newName": "personal.DevVm_User",
+    "usedBy": [
+      "Connect-DevVm.ps1"
+    ],
+    "purpose": "SSH/RDP login user for a personal dev VM",
+    "status": "keep"
+  },
+  {
+    "oldName": "ExampleOneOffKey",
+    "newName": null,
+    "purpose": "One-time manual setup only, not scheduled - not migrated",
+    "status": "remove"
+  },
+  {
+    "oldName": "StrongboxSelfTest",
+    "newName": "tools.StrongboxSelfTest",
+    "usedBy": [
+      "CLI/agent smoke-testing (get/reveal/list) - always safe to touch"
+    ],
+    "purpose": "Permanent sandbox value, not a real secret - the designated safe target for testing commands",
+    "status": "keep"
+  }
+]
