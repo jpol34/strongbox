@@ -110,6 +110,66 @@ $endpointLine = if ($protocol -eq 'Https' -and $IsWindows) {
 } else {
     "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Http -Name 'main'"
 }
+
+# Browsers resolve a bare hostname to http://, so with nothing on port 80 the natural thing to
+# type gives ERR_CONNECTION_REFUSED while the server sits on 443. Add a redirect-only listener.
+# Only for the default 443: an explicit -Port signals deliberate intent, and claiming 80 on top of
+# that would be a surprising side effect. In plain-HTTP mode port 80 *is* the server already.
+$redirectLine = ''
+$redirectRoute = ''
+if ($protocol -eq 'Https' -and $Port -eq 443) {
+    # Decide by actually attempting the bind, not by probing for a listener. Pode registers
+    # endpoints here but binds them inside Start-PodeServer, where a failure is fatal to the whole
+    # server and can't be caught per-endpoint - so a false "80 is free" reading takes down HTTPS
+    # too. A bind attempt covers both occupancy and permission, which matters because
+    # Get-StrongboxListeningProcess sees neither privileged-port restrictions (ports below 1024 on
+    # Linux) nor sockets owned by another user (ss -ltnp only reports our own PIDs).
+    $canBindPort80 = $false
+    try {
+        $probe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 80)
+        $probe.Start()
+        $probe.Stop()
+        $canBindPort80 = $true
+    } catch {
+        $canBindPort80 = $false
+    }
+
+    if ($canBindPort80) {
+        # Literal 80, not __PORT__ - that token is substituted with the HTTPS port everywhere.
+        $redirectLine = "Add-PodeEndpoint -Address 127.0.0.1 -Port 80 -Protocol Http -Name 'redirect'"
+        $redirectRoute = @'
+Add-PodeRoute -Method * -Path * -EndpointName 'redirect' -ScriptBlock {
+    # Redirect to whichever host the client asked for, so the certificate always matches the name
+    # in the address bar. Pode's own -RedirectTo can't do this: it builds the target from the
+    # endpoint's FriendlyName, which is the literal 'localhost' for a 127.0.0.1-bound endpoint, so
+    # it would send strongbox.local traffic to https://localhost and trip a name mismatch.
+    # Read the Host header rather than the parsed request URL - HTTP/1.1 guarantees the header,
+    # whereas how Pode derives Url.Host is an internal detail of the compiled listener.
+    $requestedHost = ($WebEvent.Request.Headers['Host'] -split ':')[0]
+    # Never reflect an unrecognised Host into Location: that turns this into an open redirect.
+    if ($requestedHost -notmatch '^(127\.0\.0\.1|localhost|__HOST_PATTERN__)$') {
+        $requestedHost = '__HOST_NAME__'
+    }
+    # 302, not 301: whether HTTP maps to HTTPS depends on a certificate existing on this machine,
+    # and a cached permanent redirect would keep forcing HTTPS after a fallback to HTTP-only mode.
+    Move-PodeResponseUrl -Protocol Https -Port __PORT__ -Address $requestedHost
+}
+'@
+    } else {
+        $port80Holder = Get-StrongboxListeningProcess -Port 80
+        Write-Host ""
+        if ($port80Holder) {
+            Write-Host "Port 80 is held by $($port80Holder.ProcessName) (PID $($port80Holder.Id)) - skipping the http->https redirect listener." -ForegroundColor DarkYellow
+            if ($port80Holder.ProcessName -eq 'pwsh') {
+                Write-Host "That looks like a stale Strongbox instance in HTTP-only mode. Consider 'strongbox serve stop' before restarting." -ForegroundColor DarkYellow
+            }
+        } else {
+            Write-Host "Port 80 is not bindable (in use, or privileged and this shell isn't elevated) - skipping the http->https redirect listener." -ForegroundColor DarkYellow
+        }
+        Write-Host "Use the full $displayUrl - a bare '$HostName' won't reach it." -ForegroundColor DarkYellow
+    }
+}
+
 $hostPattern = [regex]::Escape($HostName)
 
 $serverScriptText = @'
@@ -121,6 +181,8 @@ function Write-StrongboxAudit {
 }
 
 __ENDPOINT_LINE__
+__REDIRECT_LINE__
+__REDIRECT_ROUTE__
 
 Add-PodeMiddleware -Name 'SecurityHeaders' -ScriptBlock {
     Add-PodeHeader -Name 'X-Content-Type-Options' -Value 'nosniff'
@@ -319,7 +381,10 @@ Add-PodeStaticRoute -Path '/' -Source '__PUBLIC_DIR__' -EndpointName 'main' -Fil
 
 $serverScriptText = $serverScriptText.
     Replace('__ENDPOINT_LINE__', $endpointLine).
+    Replace('__REDIRECT_LINE__', $redirectLine).
+    Replace('__REDIRECT_ROUTE__', $redirectRoute).
     Replace('__PORT__', $Port).
+    Replace('__HOST_NAME__', $HostName).
     Replace('__CERT_THUMBPRINT__', $(if ($IsWindows -and $cert) { $cert.Thumbprint } else { '' })).
     Replace('__CERT_FILE__', $(if ($certPfxPath) { $certPfxPath.Replace("'", "''") } else { '' })).
     Replace('__CERT_PASSWORD__', $(if ($certPfxPassword) { $certPfxPassword.Replace("'", "''") } else { '' })).

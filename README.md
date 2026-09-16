@@ -185,6 +185,10 @@ pwsh -NoProfile -File ui/New-StrongboxCert.ps1
 Start (or restart) the server afterward - it auto-detects the trusted cert and switches to HTTPS
 on `https://strongbox.local` (no port needed); without the cert it falls back to plain HTTP.
 
+At the default HTTPS port (443), it also binds a redirect-only listener on port 80, so a bare
+`strongbox.local` (which browsers default to `http://`) redirects to HTTPS instead of failing to
+connect. Skipped with a warning if port 80 isn't bindable, or if you pass an explicit `-Port`.
+
 Certificate trust is inherently per-machine, so there's no certificate (or private key) this repo
 could ship that would make *your* browser trust it too - everyone, including on a fresh clone,
 runs `New-StrongboxCert.ps1` once on their own machine.
