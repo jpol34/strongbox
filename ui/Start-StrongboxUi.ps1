@@ -22,9 +22,26 @@ $ErrorActionPreference = 'Stop'
 
 # Certificate trust is per-machine (see New-StrongboxCert.ps1) - this just detects whichever
 # state the current machine is in rather than assuming one.
-$cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
-    Where-Object { $_.Subject -eq "CN=$HostName" -and $_.NotAfter -gt (Get-Date) } |
-    Select-Object -First 1
+$certPfxPath = $null
+$certPfxPassword = $null
+if ($IsWindows) {
+    $cert = Get-ChildItem Cert:\CurrentUser\My -ErrorAction SilentlyContinue |
+        Where-Object { $_.Subject -eq "CN=$HostName" -and $_.NotAfter -gt (Get-Date) } |
+        Select-Object -First 1
+} else {
+    $certDir = Join-Path $PSScriptRoot '.certs'
+    $pfxPath = Join-Path $certDir "$HostName.pfx"
+    $passwordPath = Join-Path $certDir "$HostName.pfx.pass"
+    $cert = $null
+    if ((Test-Path -LiteralPath $pfxPath) -and (Test-Path -LiteralPath $passwordPath)) {
+        $certPfxPassword = (Get-Content -LiteralPath $passwordPath -Raw).Trim()
+        $candidate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $certPfxPassword)
+        if ($candidate.NotAfter -gt (Get-Date)) {
+            $cert = $candidate
+            $certPfxPath = $pfxPath
+        }
+    }
+}
 $protocol = if ($cert) { 'Https' } else { 'Http' }
 if ($Port -eq 0) { $Port = if ($protocol -eq 'Https') { 443 } else { 80 } }
 
@@ -41,10 +58,17 @@ if (-not $cert) {
 # "address already in use" exception from Pode's underlying HttpListener. Report and exit
 # cleanly instead - and don't guess whether the existing holder is a stale Strongbox server;
 # let a human decide whether to stop it.
-$existingConn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-if ($existingConn) {
-    $existingProcess = Get-Process -Id $existingConn.OwningProcess -ErrorAction SilentlyContinue
-    $procDesc = if ($existingProcess) { "$($existingProcess.ProcessName) (PID $($existingProcess.Id))" } else { "PID $($existingConn.OwningProcess)" }
+$existingOwnerPid = if ($IsWindows) {
+    Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty OwningProcess
+} else {
+    # `ss -ltnp` output: "LISTEN 0 128 127.0.0.1:443 ... users:(("pwsh",pid=1234,fd=9))"
+    $line = (ss -ltnp 2>$null) -split "`n" | Where-Object { $_ -match ":$Port\s" } | Select-Object -First 1
+    if ($line -match 'pid=(\d+)') { [int]$matches[1] }
+}
+if ($existingOwnerPid) {
+    $existingProcess = Get-Process -Id $existingOwnerPid -ErrorAction SilentlyContinue
+    $procDesc = if ($existingProcess) { "$($existingProcess.ProcessName) (PID $($existingProcess.Id))" } else { "PID $existingOwnerPid" }
     Write-Host ""
     Write-Host "Strongbox UI is already running on $displayUrl ($fallbackUrl)" -ForegroundColor Cyan
     Write-Host "Held by: $procDesc" -ForegroundColor DarkGray
@@ -77,8 +101,10 @@ $manifestPath = (Resolve-Path (Join-Path $PSScriptRoot '..\manifest.json')).Path
 $publicDir = (Resolve-Path (Join-Path $PSScriptRoot 'public')).Path
 $auditLogPath = Join-Path $PSScriptRoot 'audit.log'
 
-$endpointLine = if ($protocol -eq 'Https') {
+$endpointLine = if ($protocol -eq 'Https' -and $IsWindows) {
     "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -CertificateThumbprint '__CERT_THUMBPRINT__' -CertificateStoreName My -CertificateStoreLocation CurrentUser"
+} elseif ($protocol -eq 'Https') {
+    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -Certificate '__CERT_FILE__' -CertificatePassword '__CERT_PASSWORD__'"
 } else {
     "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Http"
 }
@@ -292,7 +318,9 @@ Add-PodeStaticRoute -Path '/' -Source '__PUBLIC_DIR__' -FileBrowser:$false
 $serverScriptText = $serverScriptText.
     Replace('__ENDPOINT_LINE__', $endpointLine).
     Replace('__PORT__', $Port).
-    Replace('__CERT_THUMBPRINT__', $(if ($cert) { $cert.Thumbprint } else { '' })).
+    Replace('__CERT_THUMBPRINT__', $(if ($IsWindows -and $cert) { $cert.Thumbprint } else { '' })).
+    Replace('__CERT_FILE__', $(if ($certPfxPath) { $certPfxPath.Replace("'", "''") } else { '' })).
+    Replace('__CERT_PASSWORD__', $(if ($certPfxPassword) { $certPfxPassword.Replace("'", "''") } else { '' })).
     Replace('__TOKEN__', $token).
     Replace('__HOST_PATTERN__', $hostPattern).
     Replace('__MANIFEST_PATH__', $manifestPath).

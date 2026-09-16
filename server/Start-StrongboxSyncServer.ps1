@@ -43,7 +43,7 @@ Write-Host $bootstrapToken -ForegroundColor Yellow
 Write-Host ""
 
 $endpointLine = if ($CertificateFile) {
-    "Add-PodeEndpoint -Address 0.0.0.0 -Port __PORT__ -Protocol Https -CertificateFile '__CERT_FILE__' -CertificatePassword '__CERT_PASSWORD__'"
+    "Add-PodeEndpoint -Address 0.0.0.0 -Port __PORT__ -Protocol Https -Certificate '__CERT_FILE__' -CertificatePassword '__CERT_PASSWORD__'"
 } else {
     "Add-PodeEndpoint -Address 0.0.0.0 -Port __PORT__ -Protocol Http"
 }

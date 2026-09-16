@@ -1,6 +1,7 @@
 migration/*.csv
 ui/.token
 ui/audit.log
+ui/.certs
 
 # Real manifest documents your own vault's internal topology (system names, hostnames, client
 # names, etc.) even though it never contains secret values - keep it local-only. Commit
