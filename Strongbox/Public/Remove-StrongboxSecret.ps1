@@ -12,5 +12,6 @@ function Remove-StrongboxSecret {
         [Parameter(Mandatory)][string] $Name
     )
     Assert-StrongboxVault
-    Remove-Secret -Name $Name -Vault $script:StrongboxVaultName
+    $target = Resolve-StrongboxSecretTarget -Name $Name
+    Remove-Secret -Name $target.InternalName -Vault $script:StrongboxVaultName
 }

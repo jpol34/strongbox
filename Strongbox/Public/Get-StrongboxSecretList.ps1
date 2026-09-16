@@ -17,7 +17,10 @@ function Get-StrongboxSecretList {
     foreach ($i in (Get-SecretInfo -Vault $script:StrongboxVaultName)) { $infoByName[$i.Name] = $i }
 
     foreach ($e in $entries) {
-        $info = $infoByName[$e.newName]
+        $scope = if ($e.scope) { $e.scope } else { 'global' }
+        $project = if ($scope -eq 'project') { $e.project } else { $null }
+        $internalName = Resolve-StrongboxSecretStoreName -Name $e.newName -Scope $scope -Project $project
+        $info = $infoByName[$internalName]
         $lastRotated = $info.Metadata.LastRotated
         $rotationDays = $e.rotationDays
         $stale = $false
@@ -32,6 +35,11 @@ function Get-StrongboxSecretList {
             RotationDays = $rotationDays
             LastRotated = $lastRotated
             Stale = $stale
+            Scope = $scope
+            Project = $project
+            Synced = if ($null -ne $e.synced) { [bool]$e.synced } else { $false }
+            SyncVersion = if ($null -ne $e.syncVersion) { [int]$e.syncVersion } else { 0 }
+            SyncedAt = if ($e.syncedAt) { $e.syncedAt } else { $null }
         }
     }
 }

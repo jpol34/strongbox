@@ -10,8 +10,9 @@ function Get-StrongboxSecret {
         [switch] $Optional
     )
     Assert-StrongboxVault
+    $target = Resolve-StrongboxSecretTarget -Name $Name
     try {
-        $value = Get-Secret -Name $Name -Vault $script:StrongboxVaultName -AsPlainText -ErrorAction Stop
+        $value = Get-Secret -Name $target.InternalName -Vault $script:StrongboxVaultName -AsPlainText -ErrorAction Stop
         if ([string]::IsNullOrEmpty($value)) { throw "empty" }
         return [string]$value
     } catch {
