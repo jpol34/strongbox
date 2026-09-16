@@ -17,6 +17,7 @@ try {
 } catch {
     Import-Module (Join-Path $PSScriptRoot '..\Strongbox\Strongbox.psd1') -ErrorAction Stop
 }
+. (Join-Path $PSScriptRoot '..\Get-StrongboxListeningProcess.ps1')
 
 function Show-Usage {
     @'
@@ -83,10 +84,8 @@ function Assert-RevealAllowed {
 
 function Find-StrongboxServerProcess {
     foreach ($port in 443, 80) {
-        $conn = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-            Where-Object LocalAddress -eq '127.0.0.1' | Select-Object -First 1
-        if ($conn) {
-            $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+        $proc = Get-StrongboxListeningProcess -Port $port
+        if ($proc) {
             return [pscustomobject]@{ Port = $port; Process = $proc }
         }
     }
@@ -98,16 +97,62 @@ function ConvertTo-DisplayTable {
     $InputObject | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
 
+function Set-StrongboxClipboard {
+    param([string] $Value)
+    if ($IsWindows) {
+        Set-Clipboard -Value $Value
+        return
+    }
+    # No universal clipboard cmdlet on Linux - shell out to whichever tool is actually
+    # available (Wayland vs. X11, or neither on a headless box).
+    foreach ($tool in 'wl-copy', 'xclip', 'xsel') {
+        if (Get-Command $tool -ErrorAction SilentlyContinue) {
+            $args = switch ($tool) {
+                'xclip' { '-selection', 'clipboard' }
+                'xsel' { '--clipboard', '--input' }
+                default { @() }
+            }
+            $Value | & $tool @args
+            return
+        }
+    }
+    throw "No clipboard tool found (tried wl-copy, xclip, xsel). Install one, or use --stdout instead."
+}
+
+function Get-StrongboxClipboard {
+    if ($IsWindows) { return Get-Clipboard -Raw -ErrorAction SilentlyContinue }
+    # Same tool-preference order as Set-StrongboxClipboard - reading back with a different tool
+    # than what wrote it can hit a different clipboard backend (X11 vs. Wayland) and never see
+    # the value that was actually set.
+    foreach ($tool in 'wl-paste', 'xclip', 'xsel') {
+        if (Get-Command $tool -ErrorAction SilentlyContinue) {
+            $args = switch ($tool) {
+                'xclip' { '-selection', 'clipboard', '-o' }
+                'xsel' { '--clipboard' }
+                default { @() }
+            }
+            return (& $tool @args 2>$null) -join "`n"
+        }
+    }
+    return $null
+}
+
 function Set-ClipboardWithAutoClear {
     param([string] $Value, [int] $ClearAfterSeconds = 30)
-    Set-Clipboard -Value $Value
+    Set-StrongboxClipboard -Value $Value
     Write-Host "Copied to clipboard (clears in ${ClearAfterSeconds}s - best-effort: won't fire if you close this shell first)."
-    Start-ThreadJob -ScriptBlock {
+    # Start-ThreadJob runs in its own runspace, which doesn't inherit this script's functions -
+    # -InitializationScript re-declares them there from their own (already-defined) bodies.
+    $initScript = [scriptblock]::Create(@"
+function Set-StrongboxClipboard { ${function:Set-StrongboxClipboard} }
+function Get-StrongboxClipboard { ${function:Get-StrongboxClipboard} }
+"@)
+    Start-ThreadJob -InitializationScript $initScript -ScriptBlock {
         param($Expected, $Delay)
         Start-Sleep -Seconds $Delay
         try {
-            if ((Get-Clipboard -Raw -ErrorAction SilentlyContinue) -eq $Expected) {
-                Set-Clipboard -Value ''
+            if ((Get-StrongboxClipboard) -eq $Expected) {
+                Set-StrongboxClipboard -Value ''
             }
         } catch { }
     } -ArgumentList $Value, $ClearAfterSeconds | Out-Null
@@ -214,7 +259,13 @@ switch ($Command) {
                     return
                 }
                 $uiScript = (Resolve-Path (Join-Path $PSScriptRoot '..\ui\Start-StrongboxUi.ps1')).Path
-                Start-Process pwsh -ArgumentList '-NoProfile', '-File', $uiScript -WindowStyle Hidden
+                if ($IsWindows) {
+                    Start-Process pwsh -ArgumentList '-NoProfile', '-File', $uiScript -WindowStyle Hidden
+                } else {
+                    # -WindowStyle is Windows-only; Linux has no window to hide - just detach it
+                    # from this shell so it keeps running after the CLI command returns.
+                    Start-Process pwsh -ArgumentList '-NoProfile', '-File', $uiScript
+                }
                 # The Pode server takes a couple seconds to bind - poll rather than assume.
                 $found = $null
                 for ($i = 0; $i -lt 10 -and -not $found; $i++) {

@@ -3,12 +3,13 @@
 A machine-level secrets vault for personal/small-team dev work: a thin PowerShell module over
 `Microsoft.PowerShell.SecretManagement` + `Microsoft.PowerShell.SecretStore`, plus a CLI and a
 local web UI on top of it. No cloud, no account, no subscription - everything lives in your own
-Windows user profile.
+user profile.
 
-**Windows only.** The setup/UI scripts use the Windows certificate store
-(`Cert:\CurrentUser\...`), the Windows hosts file path, and Windows-only cmdlets
-(`Get-NetTCPConnection`). `pwsh` itself and the underlying SecretManagement/SecretStore modules
-are cross-platform, but this repo's tooling is not.
+**Windows and Linux**, each a full local peer - not a sync-only client of the other. Windows uses
+the Windows certificate store, `Get-NetTCPConnection`, and the Windows hosts file path; Linux uses
+a PFX-based cert (with `update-ca-certificates` for trust), `ss`, `/etc/hosts`, and
+`xclip`/`wl-copy`/`xsel` for clipboard support. Both branch from the same `$IsWindows`/`$IsLinux`
+checks at each call site - no separate codebases to keep in sync.
 
 ## Contents
 

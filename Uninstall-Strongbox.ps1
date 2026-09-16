@@ -25,15 +25,14 @@
 #>
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'Get-StrongboxListeningProcess.ps1')
+. (Join-Path $PSScriptRoot 'Get-StrongboxModulePath.ps1')
+
 foreach ($port in 80, 443) {
-    $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-        Where-Object LocalAddress -eq '127.0.0.1'
-    foreach ($c in $conns) {
-        $proc = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue
-        if ($proc -and $proc.ProcessName -eq 'pwsh') {
-            Write-Host "Stopping Strongbox UI server on port $port (PID $($proc.Id))..." -ForegroundColor Yellow
-            Stop-Process -Id $proc.Id -Force
-        }
+    $proc = Get-StrongboxListeningProcess -Port $port
+    if ($proc -and $proc.ProcessName -eq 'pwsh') {
+        Write-Host "Stopping Strongbox UI server on port $port (PID $($proc.Id))..." -ForegroundColor Yellow
+        Stop-Process -Id $proc.Id -Force
     }
 }
 
@@ -46,7 +45,8 @@ if (Get-SecretVault -Name $vaultName -ErrorAction SilentlyContinue) {
     Write-Host "Vault '$vaultName' is not registered." -ForegroundColor Cyan
 }
 
-$moduleRoot = Join-Path $HOME 'Documents\PowerShell\Modules\Strongbox'
+$modulePath = Get-StrongboxModulePath
+$moduleRoot = Join-Path $modulePath 'Strongbox'
 if (Test-Path -LiteralPath $moduleRoot) {
     Remove-Item -LiteralPath $moduleRoot -Recurse -Force
     Write-Host "Removed installed module copy at $moduleRoot." -ForegroundColor Green
@@ -54,14 +54,15 @@ if (Test-Path -LiteralPath $moduleRoot) {
     Write-Host "No installed module copy found at $moduleRoot." -ForegroundColor Cyan
 }
 
-$modulePath = Join-Path $HOME 'Documents\PowerShell\Modules'
-$currentPSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'User')
-if ($currentPSModulePath -like "*$modulePath*") {
-    $segments = $currentPSModulePath -split ';' | Where-Object { $_ -ne $modulePath }
-    [Environment]::SetEnvironmentVariable('PSModulePath', ($segments -join ';'), 'User')
-    Write-Host "Removed $modulePath from the User PSModulePath." -ForegroundColor Green
-} else {
-    Write-Host "User PSModulePath doesn't include $modulePath." -ForegroundColor Cyan
+if ($IsWindows) {
+    $currentPSModulePath = [Environment]::GetEnvironmentVariable('PSModulePath', 'User')
+    if ($currentPSModulePath -like "*$modulePath*") {
+        $segments = $currentPSModulePath -split ';' | Where-Object { $_ -ne $modulePath }
+        [Environment]::SetEnvironmentVariable('PSModulePath', ($segments -join ';'), 'User')
+        Write-Host "Removed $modulePath from the User PSModulePath." -ForegroundColor Green
+    } else {
+        Write-Host "User PSModulePath doesn't include $modulePath." -ForegroundColor Cyan
+    }
 }
 
 if (Test-Path -LiteralPath $PROFILE) {
@@ -76,6 +77,8 @@ if (Test-Path -LiteralPath $PROFILE) {
 }
 
 Write-Host ""
+$hostsPath = if ($IsWindows) { "$env:WINDIR\System32\drivers\etc\hosts" } else { '/etc/hosts' }
+$certTrustHint = if ($IsWindows) { 'the cert from Cert:\CurrentUser\Root' } else { 'the cert from /usr/local/share/ca-certificates/ and re-run update-ca-certificates' }
 Write-Host "Done. Every secret value is untouched - only the module/registration were removed." -ForegroundColor Green
-Write-Host "To also remove HTTPS trust: delete the cert from Cert:\CurrentUser\Root and the" -ForegroundColor DarkGray
-Write-Host "strongbox.local line from $env:WINDIR\System32\drivers\etc\hosts (manual, not done here)." -ForegroundColor DarkGray
+Write-Host "To also remove HTTPS trust: delete $certTrustHint and the" -ForegroundColor DarkGray
+Write-Host "strongbox.local line from $hostsPath (manual, not done here)." -ForegroundColor DarkGray

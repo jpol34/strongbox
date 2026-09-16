@@ -17,7 +17,7 @@ Unlike Strongbox's local web UI (loopback-only, TLS optional/cosmetic), this ser
 to be reached off-LAN. Plain HTTP is only acceptable for loopback or private-network testing.
 Any real deployment requires TLS, either:
 
-- via Pode's own HTTPS support (`-CertificateFile`/`-CertificatePassword` - point
+- via Pode's own HTTPS support (`-Certificate`/`-CertificatePassword` - point
   `STRONGBOX_SYNC_CERT_FILE`/`STRONGBOX_SYNC_CERT_PASSWORD` at a real certificate, not a
   self-signed one you trust yourself - that trick only works for the local UI because its client
   and server share a machine), or
