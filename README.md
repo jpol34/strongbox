@@ -142,6 +142,15 @@ strongbox serve start|stop|status          Manage the local web UI server
 modal's threat model - `get` is the deliberate exception, since its whole purpose is scripting/
 piping the value somewhere.
 
+**Clipboard-history hardening (Windows).** Every clipboard write Strongbox itself performs
+(`reveal`'s copy, and `set --from-clipboard`'s post-ingest clear) is marked to be excluded from
+Windows Clipboard History (Win+V) and cloud clipboard sync. This only covers writes Strongbox
+itself makes - if you used your own Ctrl+C to get a value onto the clipboard before running
+`set --from-clipboard`, that original copy may already be sitting in your clipboard history or
+synced to another device; Strongbox has no way to retroactively remove it, which is why the
+command prints a reminder after every use. No equivalent history feature exists on Linux, so
+nothing changes there.
+
 **Safeguard against scripts/agents grabbing the wrong secret.** `get`/`reveal`/`set --from-clipboard`
 refuse to touch anything except the permanent sandbox secret `tools.StrongboxSelfTest`
 (auto-provisioned by `Register-StrongboxVault.ps1` with a harmless placeholder value) when run

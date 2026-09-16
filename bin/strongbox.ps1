@@ -170,10 +170,78 @@ function ConvertTo-DisplayTable {
     $InputObject | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
 
+if ($IsWindows -and -not ('StrongboxWin32Clipboard' -as [type])) {
+    # Legacy Win32 clipboard API, used only so a real secret value written to the clipboard can
+    # also carry the two extra formats Windows documents for opting a write out of Clipboard
+    # History (Win+V) and cloud clipboard sync - Set-Clipboard has no way to set those. P/Invoke
+    # rather than the WinRT DataPackage API: user32/kernel32 are stable from any Win32 process
+    # (packaged or not), where WinRT type activation from an unpackaged pwsh.exe has known
+    # reliability gaps.
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class StrongboxWin32Clipboard {
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool CloseClipboard();
+    [DllImport("user32.dll", SetLastError = true)] public static extern bool EmptyClipboard();
+    [DllImport("user32.dll", SetLastError = true)] public static extern IntPtr SetClipboardData(uint uFormat, IntPtr hMem);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)] public static extern uint RegisterClipboardFormat(string lpszFormat);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GlobalUnlock(IntPtr hMem);
+}
+'@ -ErrorAction Stop
+}
+
+function Set-StrongboxClipboardWindows {
+    <#
+    Writes $Value to the clipboard as CF_UNICODETEXT, plus two extra clipboard formats Windows
+    documents for legacy (non-WinRT) apps to opt out of Clipboard History and cloud clipboard
+    sync: "CanIncludeInClipboardHistory" and "CanUploadToCloudClipboard", each a 4-byte DWORD of
+    0 (excluded). Only used for real secret values - clearing to an empty string has nothing to
+    protect, so that path stays on plain Set-Clipboard (see Set-StrongboxClipboard below).
+    #>
+    param([string] $Value)
+    $CF_UNICODETEXT = 13
+    $GMEM_MOVEABLE = 0x0002
+    $bytes = [System.Text.Encoding]::Unicode.GetBytes($Value + "`0")
+    if (-not [StrongboxWin32Clipboard]::OpenClipboard([IntPtr]::Zero)) {
+        throw "Could not open the clipboard (another app may be holding it)."
+    }
+    try {
+        [StrongboxWin32Clipboard]::EmptyClipboard() | Out-Null
+
+        $hMem = [StrongboxWin32Clipboard]::GlobalAlloc($GMEM_MOVEABLE, [UIntPtr]::new([uint64]$bytes.Length))
+        $ptr = [StrongboxWin32Clipboard]::GlobalLock($hMem)
+        [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
+        [StrongboxWin32Clipboard]::GlobalUnlock($hMem) | Out-Null
+        # Ownership of hMem transfers to the system once SetClipboardData succeeds - don't free it.
+        [StrongboxWin32Clipboard]::SetClipboardData($CF_UNICODETEXT, $hMem) | Out-Null
+
+        foreach ($formatName in 'CanIncludeInClipboardHistory', 'CanUploadToCloudClipboard') {
+            $fmt = [StrongboxWin32Clipboard]::RegisterClipboardFormat($formatName)
+            $flagMem = [StrongboxWin32Clipboard]::GlobalAlloc($GMEM_MOVEABLE, [UIntPtr]::new([uint64]4))
+            $flagPtr = [StrongboxWin32Clipboard]::GlobalLock($flagMem)
+            [System.Runtime.InteropServices.Marshal]::WriteInt32($flagPtr, 0)
+            [StrongboxWin32Clipboard]::GlobalUnlock($flagMem) | Out-Null
+            [StrongboxWin32Clipboard]::SetClipboardData($fmt, $flagMem) | Out-Null
+        }
+    } finally {
+        [StrongboxWin32Clipboard]::CloseClipboard() | Out-Null
+    }
+}
+
 function Set-StrongboxClipboard {
     param([string] $Value)
     if ($IsWindows) {
-        Set-Clipboard -Value $Value
+        if ($Value) {
+            Set-StrongboxClipboardWindows -Value $Value
+        } else {
+            # Nothing to protect from history when clearing to empty - keep this on the plain
+            # cmdlet so Set-ClipboardWithAutoClear's ThreadJob (which only ever clears) doesn't
+            # need to re-declare the Add-Type'd P/Invoke class in its -InitializationScript.
+            Set-Clipboard -Value $Value
+        }
         return
     }
     # No universal clipboard cmdlet on Linux - shell out to whichever tool is actually
