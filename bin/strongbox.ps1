@@ -170,13 +170,18 @@ function ConvertTo-DisplayTable {
     $InputObject | Format-Table -AutoSize | Out-String -Width 200 | Write-Host
 }
 
-if ($IsWindows -and -not ('StrongboxWin32Clipboard' -as [type])) {
+function Install-StrongboxWin32ClipboardType {
+    # Compiled lazily (only when a real-value clipboard write actually happens - reveal or set
+    # --from-clipboard) rather than unconditionally at script startup, so 'strongbox list'/'get'/
+    # etc. on Windows don't pay the Add-Type compile cost for a type they never use.
+    if ('StrongboxWin32Clipboard' -as [type]) { return }
     # Legacy Win32 clipboard API, used only so a real secret value written to the clipboard can
     # also carry the two extra formats Windows documents for opting a write out of Clipboard
     # History (Win+V) and cloud clipboard sync - Set-Clipboard has no way to set those. P/Invoke
     # rather than the WinRT DataPackage API: user32/kernel32 are stable from any Win32 process
     # (packaged or not), where WinRT type activation from an unpackaged pwsh.exe has known
-    # reliability gaps.
+    # reliability gaps (confirmed empirically: Clipboard.IsHistoryEnabled() fails to load its
+    # WinRT type from this script's own pwsh process).
     Add-Type -TypeDefinition @'
 using System;
 using System.Runtime.InteropServices;
@@ -189,8 +194,27 @@ public static class StrongboxWin32Clipboard {
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalLock(IntPtr hMem);
     [DllImport("kernel32.dll", SetLastError = true)] public static extern bool GlobalUnlock(IntPtr hMem);
+    [DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GlobalFree(IntPtr hMem);
 }
 '@ -ErrorAction Stop
+}
+
+function New-StrongboxClipboardBlock {
+    # Allocates a moveable global memory block, copies $Bytes into it, and returns the handle.
+    # Throws (rather than silently proceeding with a null pointer) if either GlobalAlloc or
+    # GlobalLock fails.
+    param([byte[]] $Bytes)
+    $GMEM_MOVEABLE = 0x0002
+    $hMem = [StrongboxWin32Clipboard]::GlobalAlloc($GMEM_MOVEABLE, [UIntPtr]::new([uint64]$Bytes.Length))
+    if ($hMem -eq [IntPtr]::Zero) { throw "GlobalAlloc failed while writing to the clipboard." }
+    $ptr = [StrongboxWin32Clipboard]::GlobalLock($hMem)
+    if ($ptr -eq [IntPtr]::Zero) {
+        [StrongboxWin32Clipboard]::GlobalFree($hMem) | Out-Null
+        throw "GlobalLock failed while writing to the clipboard."
+    }
+    [System.Runtime.InteropServices.Marshal]::Copy($Bytes, 0, $ptr, $Bytes.Length)
+    [StrongboxWin32Clipboard]::GlobalUnlock($hMem) | Out-Null
+    return $hMem
 }
 
 function Set-StrongboxClipboardWindows {
@@ -202,31 +226,47 @@ function Set-StrongboxClipboardWindows {
     protect, so that path stays on plain Set-Clipboard (see Set-StrongboxClipboard below).
     #>
     param([string] $Value)
+    Install-StrongboxWin32ClipboardType
     $CF_UNICODETEXT = 13
-    $GMEM_MOVEABLE = 0x0002
     $bytes = [System.Text.Encoding]::Unicode.GetBytes($Value + "`0")
-    if (-not [StrongboxWin32Clipboard]::OpenClipboard([IntPtr]::Zero)) {
-        throw "Could not open the clipboard (another app may be holding it)."
+
+    # OpenClipboard can transiently fail while another app (a clipboard manager, a screenshot
+    # tool, Windows' own History service) briefly holds it - Set-Clipboard retries internally, so
+    # match that instead of throwing on the first failure.
+    $opened = $false
+    for ($i = 0; $i -lt 5 -and -not $opened; $i++) {
+        $opened = [StrongboxWin32Clipboard]::OpenClipboard([IntPtr]::Zero)
+        if (-not $opened) { Start-Sleep -Milliseconds 100 }
     }
+    if (-not $opened) { throw "Could not open the clipboard after several attempts (another app may be holding it)." }
+
+    $allocated = [System.Collections.Generic.List[IntPtr]]::new()
     try {
         [StrongboxWin32Clipboard]::EmptyClipboard() | Out-Null
 
-        $hMem = [StrongboxWin32Clipboard]::GlobalAlloc($GMEM_MOVEABLE, [UIntPtr]::new([uint64]$bytes.Length))
-        $ptr = [StrongboxWin32Clipboard]::GlobalLock($hMem)
-        [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $ptr, $bytes.Length)
-        [StrongboxWin32Clipboard]::GlobalUnlock($hMem) | Out-Null
-        # Ownership of hMem transfers to the system once SetClipboardData succeeds - don't free it.
-        [StrongboxWin32Clipboard]::SetClipboardData($CF_UNICODETEXT, $hMem) | Out-Null
+        $hMem = New-StrongboxClipboardBlock -Bytes $bytes
+        $allocated.Add($hMem)
+        if ([StrongboxWin32Clipboard]::SetClipboardData($CF_UNICODETEXT, $hMem) -eq [IntPtr]::Zero) {
+            throw "SetClipboardData failed while writing the clipboard value."
+        }
+        $allocated.Remove($hMem) | Out-Null   # ownership transferred to the system on success
 
         foreach ($formatName in 'CanIncludeInClipboardHistory', 'CanUploadToCloudClipboard') {
             $fmt = [StrongboxWin32Clipboard]::RegisterClipboardFormat($formatName)
-            $flagMem = [StrongboxWin32Clipboard]::GlobalAlloc($GMEM_MOVEABLE, [UIntPtr]::new([uint64]4))
-            $flagPtr = [StrongboxWin32Clipboard]::GlobalLock($flagMem)
-            [System.Runtime.InteropServices.Marshal]::WriteInt32($flagPtr, 0)
-            [StrongboxWin32Clipboard]::GlobalUnlock($flagMem) | Out-Null
-            [StrongboxWin32Clipboard]::SetClipboardData($fmt, $flagMem) | Out-Null
+            $flagMem = New-StrongboxClipboardBlock -Bytes ([System.BitConverter]::GetBytes([int32]0))
+            $allocated.Add($flagMem)
+            if ([StrongboxWin32Clipboard]::SetClipboardData($fmt, $flagMem) -eq [IntPtr]::Zero) {
+                # Best-effort: the real value is already on the clipboard, so don't fail the
+                # whole write over a missed history-exclusion flag - just warn and move on.
+                Write-Warning "Could not set the '$formatName' clipboard-history exclusion flag."
+                continue
+            }
+            $allocated.Remove($flagMem) | Out-Null
         }
     } finally {
+        # Anything still in $allocated means its SetClipboardData call never succeeded - free it
+        # rather than leaking it, since ownership never actually transferred to the system.
+        foreach ($leftover in $allocated) { [StrongboxWin32Clipboard]::GlobalFree($leftover) | Out-Null }
         [StrongboxWin32Clipboard]::CloseClipboard() | Out-Null
     }
 }
