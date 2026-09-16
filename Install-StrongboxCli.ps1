@@ -14,7 +14,7 @@
 #>
 $ErrorActionPreference = 'Stop'
 
-$scriptPath = (Resolve-Path (Join-Path $PSScriptRoot 'bin\strongbox.ps1')).Path
+$scriptPath = (Resolve-Path (Join-Path $PSScriptRoot 'bin' 'strongbox.ps1')).Path
 $marker = '# >>> Strongbox CLI >>>'
 $endMarker = '# <<< Strongbox CLI <<<'
 $functionBlock = @"

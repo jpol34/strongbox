@@ -65,7 +65,7 @@ if (-not $cert) {
 # "address already in use" exception from Pode's underlying HttpListener. Report and exit
 # cleanly instead - and don't guess whether the existing holder is a stale Strongbox server;
 # let a human decide whether to stop it.
-. (Join-Path $PSScriptRoot '..\Get-StrongboxListeningProcess.ps1')
+. (Join-Path $PSScriptRoot '..' 'Get-StrongboxListeningProcess.ps1')
 $existingProcess = Get-StrongboxListeningProcess -Port $Port
 if ($existingProcess) {
     Write-Host ""
@@ -96,7 +96,7 @@ if ($RotateToken -or -not (Test-Path -LiteralPath $tokenPath)) {
     Write-Host ""
 }
 
-$manifestPath = (Resolve-Path (Join-Path $PSScriptRoot '..\manifest.json')).Path
+$manifestPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'manifest.json')).Path
 $publicDir = (Resolve-Path (Join-Path $PSScriptRoot 'public')).Path
 $auditLogPath = Join-Path $PSScriptRoot 'audit.log'
 

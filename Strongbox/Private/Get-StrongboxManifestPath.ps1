@@ -7,9 +7,9 @@ function Get-StrongboxManifestPath {
         copied onto $PSModulePath. Falls back to the dev-checkout-relative path when run directly
         from the source tree (no pointer file yet).
     #>
-    $pointerFile = Join-Path $PSScriptRoot '..\manifest-path.txt'
+    $pointerFile = Join-Path $PSScriptRoot '..' 'manifest-path.txt'
     if (Test-Path -LiteralPath $pointerFile) {
         return (Get-Content -LiteralPath $pointerFile -Raw).Trim()
     }
-    Join-Path $PSScriptRoot '..\..\manifest.json'
+    Join-Path $PSScriptRoot '..' '..' 'manifest.json'
 }
