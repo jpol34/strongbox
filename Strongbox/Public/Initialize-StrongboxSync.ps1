@@ -40,7 +40,14 @@ function Initialize-StrongboxSync {
     $cacheDir = Get-StrongboxSyncCachePath -Item Directory
     New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
     Set-Content -LiteralPath (Get-StrongboxSyncCachePath -Item ServerUrl) -Value $ServerUrl -NoNewline
-    Set-Content -LiteralPath (Get-StrongboxSyncCachePath -Item DeviceToken) -Value $response.token -NoNewline
+    $deviceTokenPath = Get-StrongboxSyncCachePath -Item DeviceToken
+    Set-Content -LiteralPath $deviceTokenPath -Value $response.token -NoNewline
+    if ($IsLinux -or $IsMacOS) {
+        # This token is bearer auth for every sync request this device makes - restrict it to this
+        # user in case another local account shares the machine, matching the server's own
+        # bootstrap-token hardening (Get-StrongboxSyncBootstrapToken.ps1).
+        [System.IO.File]::SetUnixFileMode($deviceTokenPath, [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
+    }
     # DPAPI-encrypted (ConvertFrom-SecureString with no -Key), unlike backup's deliberately
     # portable encryption - this cache only ever needs to survive on this machine, for this user.
     $SyncPassphrase | ConvertFrom-SecureString | Set-Content -LiteralPath (Get-StrongboxSyncCachePath -Item Passphrase) -NoNewline
