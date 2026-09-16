@@ -404,6 +404,29 @@ Describe 'Initialize-StrongboxSync' {
         (Get-Content -LiteralPath (Join-Path $cacheDir 'device-token') -Raw) | Should -Be 'the-device-token'
         { Get-Content -LiteralPath (Join-Path $cacheDir 'sync-passphrase') -Raw | ConvertTo-SecureString } | Should -Not -Throw
     }
+
+    It 'restricts the cached device token to the owning user on Linux/macOS' -Skip:(-not ($IsLinux -or $IsMacOS)) {
+        $cacheDir = Join-Path $TestDrive 'strongbox-home'
+        Mock -ModuleName Strongbox Get-StrongboxSyncCachePath {
+            param($Item)
+            switch ($Item) {
+                'Directory' { $cacheDir }
+                'ServerUrl' { Join-Path $cacheDir 'server-url' }
+                'DeviceToken' { Join-Path $cacheDir 'device-token' }
+                'Passphrase' { Join-Path $cacheDir 'sync-passphrase' }
+            }
+        }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{ deviceId = 'abc-123'; token = 'the-device-token' }
+        }
+
+        $pass = ConvertTo-SecureString 'sync-pw' -AsPlainText -Force
+        $bootstrap = ConvertTo-SecureString 'bootstrap-token' -AsPlainText -Force
+        Initialize-StrongboxSync -ServerUrl 'http://127.0.0.1:8080/' -DeviceName 'test-device' -SyncPassphrase $pass -BootstrapToken $bootstrap
+
+        $mode = [System.IO.File]::GetUnixFileMode((Join-Path $cacheDir 'device-token'))
+        $mode | Should -Be ([System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
+    }
 }
 
 Describe 'Push-StrongboxSecret / Pull-StrongboxSecret / Get-StrongboxSyncStatus' {
