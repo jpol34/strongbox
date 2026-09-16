@@ -11,8 +11,20 @@ a PFX-based cert (with `update-ca-certificates` for trust), `ss`, `/etc/hosts`, 
 `xclip`/`wl-copy`/`xsel` for clipboard support. Both branch from the same `$IsWindows`/`$IsLinux`
 checks at each call site - no separate codebases to keep in sync.
 
+## Get started with an AI coding agent
+
+Paste this to an agent working on any project on a machine that has (or should have) Strongbox:
+
+> This machine may have Strongbox set up for secrets (PowerShell module + CLI + web UI over
+> Microsoft.PowerShell.SecretManagement/SecretStore). Check with `strongbox help` - if it's not
+> there, tell me rather than installing it yourself. Once it's available, get values via
+> `strongbox get <name>` or `Get-StrongboxSecret -Name <name>` - don't ask me to paste one in,
+> don't hardcode one. Use `tools.StrongboxSelfTest` to test commands; `get`/`reveal` refuse any
+> other name when run non-interactively unless I pass `--real`.
+
 ## Contents
 
+- [Get started with an AI coding agent](#get-started-with-an-ai-coding-agent)
 - [Features](#features)
 - [Quick start](#quick-start)
 - [PowerShell module](#powershell-module)
@@ -68,13 +80,14 @@ Get-Command -Module Strongbox
 
 | Function | What it does |
 |---|---|
-| `Get-StrongboxSecret -Name X [-Optional]` | Read a plaintext value |
-| `Set-StrongboxSecret -Name X -Value Y [-Owner ...] [-RotationDays N]` | Write a value; stamps `LastRotated` automatically |
+| `Get-StrongboxSecret -Name X [-Optional]` | Read a plaintext value (a project-scoped entry shadows a global one of the same name while inside that project) |
+| `Set-StrongboxSecret -Name X -Value Y [-Owner ...] [-RotationDays N] [-Scope Project [-Project slug]]` | Write a value; stamps `LastRotated` automatically. `-Scope Project` writes a project-scoped secret instead of global |
 | `Remove-StrongboxSecret -Name X` | Delete a value |
-| `Get-StrongboxSecretList` | Every tracked secret's name/owner/purpose/rotation/staleness - never values |
+| `Get-StrongboxSecretList` | Every tracked secret's name/owner/purpose/rotation/staleness/scope/sync state - never values |
 | `Get-StrongboxStaleSecrets` | Just the entries past their `RotationDays` policy |
 | `Test-Strongbox` | Drift check: confirms `manifest.json` and the vault agree on what secrets exist |
 | `Export-StrongboxBackup` / `Import-StrongboxBackup` | See [Backup / restore](#backup--restore) |
+| `Initialize-StrongboxSync` / `Push-StrongboxSecret` / `Pull-StrongboxSecret` / `Get-StrongboxSyncStatus` | See [Cloud sync (BYOC)](#cloud-sync-byoc) |
 | `Import-StrongboxSecretEnv -Map @{ENV_VAR='secret.name'}` | Set process-scoped env vars from the vault |
 | `Export-StrongboxSecretUserSecrets -Project <csproj> -Map @{ConfigKey='secret.name'}` | Fan vault secrets into `dotnet user-secrets` |
 | `Get-StrongboxSecretHeaders -Name X -Header Y [-Prefix 'Bearer ']` | JSON header object, for an MCP `headersHelper` |
@@ -96,6 +109,18 @@ strongbox reveal <name> [--stdout] [--real] Copies to clipboard (auto-clears in 
 
 strongbox backup export <path>             Prompts for a passphrase - never pass one as an
 strongbox backup import <path> [--force]   argument, it would land in shell history
+
+strongbox sync init <server-url> [--device-name X]
+                                            Register this device against a sync server (prompts
+                                            for the sync passphrase and the server's admin
+                                            bootstrap token)
+strongbox sync push [name]                 Push synced secrets (or just [name]) to the server
+strongbox sync pull [name] [--scope project --project X]
+                                            Pull synced secrets (or just [name]) from the server;
+                                            --scope is only needed the first time this device
+                                            pulls a project-scoped secret it has no local record
+                                            of yet
+strongbox sync status [--json]             Local vs. remote sync version drift, read-only
 
 strongbox serve start|stop|status          Manage the local web UI server
 ```
@@ -141,11 +166,12 @@ purely cosmetic, since nothing ever leaves the loopback interface either way. Fo
 hostname *and* a real "Secure" indicator, run this once per machine:
 
 ```powershell
-# 1. Requires an elevated PowerShell (hosts file is a protected system file):
-Add-Content -Path "$env:WINDIR\System32\drivers\etc\hosts" -Value "127.0.0.1 strongbox.local"
+# 1. Requires elevation (hosts file is a protected system file):
+Add-Content -Path "$env:WINDIR\System32\drivers\etc\hosts" -Value "127.0.0.1 strongbox.local"   # Windows
+echo '127.0.0.1 strongbox.local' | sudo tee -a /etc/hosts                                        # Linux
 
 # 2. Does NOT require elevation - generates a self-signed cert and trusts it for your user only:
-pwsh -NoProfile -File ui\New-StrongboxCert.ps1
+pwsh -NoProfile -File ui/New-StrongboxCert.ps1
 ```
 
 Start (or restart) the server afterward - it auto-detects the trusted cert and switches to HTTPS
@@ -153,10 +179,14 @@ on `https://strongbox.local` (no port needed); without the cert it falls back to
 
 Certificate trust is inherently per-machine, so there's no certificate (or private key) this repo
 could ship that would make *your* browser trust it too - everyone, including on a fresh clone,
-runs `New-StrongboxCert.ps1` once on their own machine. It uses PowerShell's built-in
-`New-SelfSignedCertificate` rather than a third-party tool like `mkcert`, and trusts the cert only
-in `Cert:\CurrentUser\Root` (no admin elevation needed, unlike `Cert:\LocalMachine\Root`) - scoped to
-exactly one cert, one hostname, one user.
+runs `New-StrongboxCert.ps1` once on their own machine.
+
+On Windows, it uses the built-in `New-SelfSignedCertificate` and trusts the cert in
+`Cert:\CurrentUser\Root` (no admin elevation needed, unlike `Cert:\LocalMachine\Root`) - scoped to
+exactly one cert, one hostname, one user. Linux has no cert store to use, so the cert is built
+directly via .NET's `CertificateRequest` API and exported as a password-protected PFX under
+`ui/.certs/` (gitignored) for Pode's HTTPS endpoint. Trusting it system-wide needs
+`update-ca-certificates`, which needs root - that command is printed, not run for you.
 
 ## Naming convention & manifest.json
 
@@ -167,6 +197,11 @@ regex in `ui\Start-StrongboxUi.ps1`'s POST/reveal/delete routes for different pr
 policy. It never contains secret *values*, but it does describe your own systems (internal
 hostnames, client names, etc.), so it's gitignored rather than committed. See
 `manifest.example.json` for the schema shape with fake placeholder data.
+
+Entries also carry `scope` (`"global"`, the default, or `"project"`), `project` (a repo slug, for
+project-scoped entries), and the sync fields `synced`/`syncVersion`/`syncedAt` (see
+[Cloud sync (BYOC)](#cloud-sync-byoc)). All optional - an entry with none of them is just an
+ordinary global, unsynced secret.
 
 ## Backup / restore
 
@@ -213,13 +248,13 @@ token) are cached in `~/.strongbox/`, outside this repo, so they survive a re-cl
 pwsh -NoProfile -File Uninstall-Strongbox.ps1
 ```
 
-Stops any running UI server, removes the installed module copy and its `PSModulePath` entry, the
-`strongbox` CLI function from `$PROFILE`, and unregisters the `Strongbox` vault *name* - every
-actual secret value is untouched (SecretStore has one physical store per Windows user shared by
-every vault name registered against it, so unregistering a name never touches the data;
-re-running the install script re-registers the same name against the same store). Does not touch
-the HTTPS cert trust, the `strongbox.local` hosts entry, this repo directory, or `manifest.json` -
-remove those yourself if wanted.
+Stops any running UI server, removes the installed module copy (`~/Documents/PowerShell/Modules`
+on Windows, `~/.local/share/powershell/Modules` on Linux), the `strongbox` CLI function from
+`$PROFILE`, and unregisters the `Strongbox` vault *name* - every actual secret value is untouched
+(SecretStore has one physical store per user shared by every vault name registered against it, so
+unregistering a name never touches the data; re-running the install script re-registers the same
+name against the same store). Does not touch the HTTPS cert trust, the `strongbox.local` hosts
+entry, this repo directory, or `manifest.json` - remove those yourself if wanted.
 
 ## Tests
 
