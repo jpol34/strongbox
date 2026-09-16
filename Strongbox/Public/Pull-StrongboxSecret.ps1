@@ -30,28 +30,25 @@ function Pull-StrongboxSecret {
     $manifestPath = Get-StrongboxManifestPath
     $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
 
-    $targets = if ($Name -and $Scope) {
-        if ($Scope -eq 'project' -and -not $Project) { $Project = Resolve-StrongboxProjectScope }
-        if ($Scope -eq 'project' -and -not $Project) { throw "Pull-StrongboxSecret: -Scope project requires -Project, or being run inside a git repo to infer it." }
-        $resolvedProject = if ($Scope -eq 'project') { $Project } else { $null }
-        $existing = if ($Scope -eq 'project') {
+    $targets = if ($Name) {
+        if ($Scope) {
+            if ($Scope -eq 'project' -and -not $Project) { $Project = Resolve-StrongboxProjectScope }
+            if ($Scope -eq 'project' -and -not $Project) { throw "Pull-StrongboxSecret: -Scope project requires -Project, or being run inside a git repo to infer it." }
+            $resolvedScope = $Scope
+            $resolvedProject = if ($Scope -eq 'project') { $Project } else { $null }
+            $internalName = Resolve-StrongboxSecretStoreName -Name $Name -Scope $resolvedScope -Project $resolvedProject
+        } else {
+            $target = Resolve-StrongboxSecretTarget -Name $Name
+            $resolvedScope = $target.Scope
+            $resolvedProject = $target.Project
+            $internalName = $target.InternalName
+        }
+        $existing = if ($resolvedScope -eq 'project') {
             $manifest | Where-Object { $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $resolvedProject } | Select-Object -First 1
         } else {
             $manifest | Where-Object { $_.newName -eq $Name -and (-not $_.scope -or $_.scope -eq 'global') } | Select-Object -First 1
         }
-        @([pscustomobject]@{
-            Name = $Name; Scope = $Scope; Project = $resolvedProject
-            InternalName = Resolve-StrongboxSecretStoreName -Name $Name -Scope $Scope -Project $resolvedProject
-            Existing = $existing
-        })
-    } elseif ($Name) {
-        $target = Resolve-StrongboxSecretTarget -Name $Name
-        $existing = if ($target.Scope -eq 'project') {
-            $manifest | Where-Object { $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $target.Project } | Select-Object -First 1
-        } else {
-            $manifest | Where-Object { $_.newName -eq $Name -and (-not $_.scope -or $_.scope -eq 'global') } | Select-Object -First 1
-        }
-        @([pscustomobject]@{ Name = $Name; Scope = $target.Scope; Project = $target.Project; InternalName = $target.InternalName; Existing = $existing })
+        @([pscustomobject]@{ Name = $Name; Scope = $resolvedScope; Project = $resolvedProject; InternalName = $internalName; Existing = $existing })
     } else {
         # Iterate the actual synced entries, not deduplicated names - a global and a
         # project-scoped entry can share a newName and both be synced independently.

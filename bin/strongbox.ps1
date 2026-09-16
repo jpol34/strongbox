@@ -242,7 +242,8 @@ switch ($Command) {
                 Push-StrongboxSecret -Name $Rest[1]
             }
             'pull' {
-                $params = @{ Name = $Rest[1] }
+                $params = @{}
+                if ($Rest.Count -gt 1 -and $Rest[1] -notlike '--*') { $params.Name = $Rest[1] }
                 $scopeIdx = [array]::IndexOf($Rest, '--scope')
                 if ($scopeIdx -ge 0 -and $Rest.Count -gt $scopeIdx + 1) { $params.Scope = $Rest[$scopeIdx + 1] }
                 $projectIdx = [array]::IndexOf($Rest, '--project')
