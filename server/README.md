@@ -5,8 +5,9 @@ it only ever stores/serves ciphertext plus non-secret metadata (name, scope, pro
 device ID, timestamp) - the encryption key never leaves a client. See
 [`../docs/SYNC-API.md`](../docs/SYNC-API.md) for the full HTTP contract.
 
-Built with Pode (already a Strongbox dependency), backed by SQLite via the `PSSQLite` module -
-sized for Pi/NAS-class hardware, no external database required.
+Built with Pode (already a Strongbox dependency), backed by SQLite via a direct `libsqlite3`
+P/Invoke wrapper (no native-driver module to track per architecture, so it runs unmodified on
+amd64 and arm64 alike) - sized for Pi/NAS-class hardware, no external database required.
 
 ## Run it
 

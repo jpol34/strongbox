@@ -26,7 +26,6 @@ param(
 $ErrorActionPreference = 'Stop'
 
 Import-Module Pode -ErrorAction Stop
-Import-Module PSSQLite -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'StrongboxSync.psm1') -ErrorAction Stop
 
 New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
