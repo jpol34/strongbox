@@ -375,3 +375,195 @@ Describe 'Export-StrongboxBackup / Import-StrongboxBackup' {
         Should -Invoke -ModuleName Strongbox Set-Secret -Times 1
     }
 }
+
+Describe 'Initialize-StrongboxSync' {
+    It 'registers the device and caches server URL, token, and encrypted passphrase' {
+        $cacheDir = Join-Path $TestDrive 'strongbox-home'
+        Mock -ModuleName Strongbox Get-StrongboxSyncCachePath {
+            param($Item)
+            switch ($Item) {
+                'Directory' { $cacheDir }
+                'ServerUrl' { Join-Path $cacheDir 'server-url' }
+                'DeviceToken' { Join-Path $cacheDir 'device-token' }
+                'Passphrase' { Join-Path $cacheDir 'sync-passphrase' }
+            }
+        }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{ deviceId = 'abc-123'; token = 'the-device-token' }
+        }
+
+        $pass = ConvertTo-SecureString 'sync-pw' -AsPlainText -Force
+        $bootstrap = ConvertTo-SecureString 'bootstrap-token' -AsPlainText -Force
+        Initialize-StrongboxSync -ServerUrl 'http://127.0.0.1:8080/' -DeviceName 'test-device' -SyncPassphrase $pass -BootstrapToken $bootstrap
+
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'http://127.0.0.1:8080/devices' -and $Headers.Authorization -eq 'Bearer bootstrap-token'
+        }
+        (Get-Content -LiteralPath (Join-Path $cacheDir 'server-url') -Raw) | Should -Be 'http://127.0.0.1:8080'
+        (Get-Content -LiteralPath (Join-Path $cacheDir 'device-token') -Raw) | Should -Be 'the-device-token'
+        { Get-Content -LiteralPath (Join-Path $cacheDir 'sync-passphrase') -Raw | ConvertTo-SecureString } | Should -Not -Throw
+    }
+}
+
+Describe 'Push-StrongboxSecret / Pull-StrongboxSecret / Get-StrongboxSyncStatus' {
+    BeforeEach {
+        $manifestPath = Join-Path $TestDrive 'manifest.json'
+        @(
+            [pscustomobject]@{
+                oldName = 'A'; newName = 'tools.Example'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                synced = $true; syncVersion = 1; syncedAt = '2026-01-01T00:00:00Z'
+            }
+            [pscustomobject]@{ oldName = 'B'; newName = 'tools.NotSynced'; usedBy = @('y'); purpose = 'p2'; status = 'keep' }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-StrongboxManifestPath { $manifestPath }
+        Mock -ModuleName Strongbox Get-StrongboxSyncContext {
+            [pscustomobject]@{
+                ServerUrl   = 'http://127.0.0.1:8080'
+                DeviceToken = 'device-token'
+                Passphrase  = (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force)
+            }
+        }
+    }
+
+    It 'Push-StrongboxSecret pushes every synced:true entry and updates syncVersion/syncedAt' {
+        Mock -ModuleName Strongbox Get-Secret { 'plaintext-value' }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{ name = 'tools.Example'; version = 2 }
+        }
+
+        Push-StrongboxSecret
+
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'http://127.0.0.1:8080/secrets/tools.Example' -and $Method -eq 'Post' -and
+            $Headers.Authorization -eq 'Bearer device-token'
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest | Where-Object newName -eq 'tools.Example'
+        $entry.syncVersion | Should -Be 2
+        $entry.syncedAt | Should -Not -Be '2026-01-01T00:00:00Z'
+    }
+
+    It 'Push-StrongboxSecret throws a pull-first error on a 409 version conflict' {
+        Mock -ModuleName Strongbox Get-Secret { 'plaintext-value' }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            $resp = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Conflict)
+            $ex = [Microsoft.PowerShell.Commands.HttpResponseException]::new('409 conflict', $resp)
+            throw $ex
+        }
+
+        { Push-StrongboxSecret -Name 'tools.Example' } | Should -Throw '*sync pull*'
+    }
+
+    It 'Push-StrongboxSecret throws when -Name has no synced:true manifest entry' {
+        { Push-StrongboxSecret -Name 'tools.NotSynced' } | Should -Throw
+    }
+
+    It 'Pull-StrongboxSecret decrypts the server envelope and writes it locally' {
+        $envelope = InModuleScope Strongbox { Protect-StrongboxSyncValue -Value 'pulled-plaintext' -Passphrase (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force) }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{
+                name = 'tools.Example'; version = 5; salt = $envelope.salt; nonce = $envelope.nonce
+                tag = $envelope.tag; ciphertext = $envelope.ciphertext
+            }
+        }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Pull-StrongboxSecret -Name 'tools.Example'
+
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example' -and $Secret -eq 'pulled-plaintext'
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        ($manifest | Where-Object newName -eq 'tools.Example').syncVersion | Should -Be 5
+    }
+
+    It 'Pull-StrongboxSecret creates a new manifest entry for a name not yet tracked' {
+        $envelope = InModuleScope Strongbox { Protect-StrongboxSyncValue -Value 'brand-new' -Passphrase (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force) }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{
+                name = 'tools.Untracked'; version = 1; salt = $envelope.salt; nonce = $envelope.nonce
+                tag = $envelope.tag; ciphertext = $envelope.ciphertext
+            }
+        }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Pull-StrongboxSecret -Name 'tools.Untracked'
+
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest | Where-Object newName -eq 'tools.Untracked'
+        $entry.synced | Should -BeTrue
+        $entry.syncVersion | Should -Be 1
+    }
+
+    It 'Pull-StrongboxSecret skips a name that is 404 on the server' {
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            $resp = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)
+            $ex = [Microsoft.PowerShell.Commands.HttpResponseException]::new('404', $resp)
+            throw $ex
+        }
+        { Pull-StrongboxSecret -Name 'tools.Ghost' } | Should -Not -Throw
+    }
+
+    It 'Get-StrongboxSyncStatus reports drift without mutating the manifest' {
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            @([pscustomobject]@{ name = 'tools.Example'; scope = 'global'; project = $null; version = 3 })
+        }
+        $before = Get-Content -LiteralPath $manifestPath -Raw
+
+        $status = Get-StrongboxSyncStatus
+
+        $status.Name | Should -Be 'tools.Example'
+        $status.LocalVersion | Should -Be 1
+        $status.RemoteVersion | Should -Be 3
+        $status.Drift | Should -Be 'out-of-sync'
+        (Get-Content -LiteralPath $manifestPath -Raw) | Should -Be $before
+    }
+
+    It 'Pull-StrongboxSecret queries and writes under the project-scoped name for a synced project entry' {
+        @(
+            [pscustomobject]@{
+                oldName = 'A'; newName = 'tools.ProjExample'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                scope = 'project'; project = 'owner/myapp'; synced = $true; syncVersion = 0
+            }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+        $envelope = InModuleScope Strongbox { Protect-StrongboxSyncValue -Value 'proj-value' -Passphrase (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force) }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{
+                name = 'tools.ProjExample'; version = 1; salt = $envelope.salt; nonce = $envelope.nonce
+                tag = $envelope.tag; ciphertext = $envelope.ciphertext
+            }
+        }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Pull-StrongboxSecret -Name 'tools.ProjExample'
+
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -like '*scope=project*' -and $Uri -like '*project=owner/myapp*'
+        }
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.ProjExample::owner/myapp'
+        }
+    }
+
+    It 'Push-StrongboxSecret does not throw on a malformed scope: project entry with no project value' {
+        @(
+            [pscustomobject]@{
+                oldName = 'A'; newName = 'tools.Malformed'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                scope = 'project'; synced = $true; syncVersion = 0
+            }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-Secret { 'plaintext' }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{ name = 'tools.Malformed'; version = 1 }
+        }
+
+        { Push-StrongboxSecret } | Should -Not -Throw
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'http://127.0.0.1:8080/secrets/tools.Malformed'
+        }
+    }
+}

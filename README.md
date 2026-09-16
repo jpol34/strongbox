@@ -19,6 +19,7 @@ are cross-platform, but this repo's tooling is not.
 - [Web UI](#web-ui)
 - [Naming convention & manifest.json](#naming-convention--manifestjson)
 - [Backup / restore](#backup--restore)
+- [Cloud sync (BYOC)](#cloud-sync-byoc)
 - [Uninstalling](#uninstalling)
 - [Tests](#tests)
 - [Known issues](#known-issues)
@@ -185,6 +186,25 @@ The backup file is AES-256-GCM encrypted with a key derived from your passphrase
 iterations, random per-file salt) - deliberately *not* Windows DPAPI, since a DPAPI-"protected"
 file would only ever be restorable on the exact same Windows profile, defeating the point of a
 disaster-recovery backup. There is no recovery if you lose the passphrase.
+
+## Cloud sync (BYOC)
+
+Opt-in, per-secret, zero-knowledge sync against a self-hosted reference server (see
+[`server/README.md`](server/README.md) and [`docs/SYNC-API.md`](docs/SYNC-API.md)). Nothing syncs
+until a manifest entry is explicitly marked `synced: true` - most secrets stay purely local.
+
+```powershell
+strongbox sync init http://your-server:8080 --device-name my-laptop   # once per device
+strongbox sync push                                                   # push every synced secret
+strongbox sync pull                                                   # pull every synced secret
+strongbox sync status                                                 # local vs. remote version drift
+```
+
+Sync uses the same AES-256-GCM/PBKDF2 encryption as backup, but a separate passphrase - the server
+only ever stores/serves ciphertext plus non-secret metadata (name, scope, project, version), and
+never sees the encryption key. A push against a stale local version is refused ("pull first"),
+never silently overwritten. Sync credentials (the passphrase and this device's server-issued
+token) are cached in `~/.strongbox/`, outside this repo, so they survive a re-clone.
 
 ## Uninstalling
 
