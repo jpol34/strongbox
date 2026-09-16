@@ -25,21 +25,14 @@
 #>
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'Get-StrongboxListeningProcess.ps1')
+. (Join-Path $PSScriptRoot 'Get-StrongboxModulePath.ps1')
+
 foreach ($port in 80, 443) {
-    $ownerPid = if ($IsWindows) {
-        Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-            Where-Object LocalAddress -eq '127.0.0.1' | Select-Object -First 1 -ExpandProperty OwningProcess
-    } else {
-        # `ss -ltnp` output: "LISTEN 0 128 127.0.0.1:443 ... users:(("pwsh",pid=1234,fd=9))"
-        $line = (ss -ltnp 2>$null) -split "`n" | Where-Object { $_ -match "127\.0\.0\.1:$port\s" }
-        if ($line -match 'pid=(\d+)') { [int]$matches[1] }
-    }
-    if ($ownerPid) {
-        $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
-        if ($proc -and $proc.ProcessName -eq 'pwsh') {
-            Write-Host "Stopping Strongbox UI server on port $port (PID $($proc.Id))..." -ForegroundColor Yellow
-            Stop-Process -Id $proc.Id -Force
-        }
+    $proc = Get-StrongboxListeningProcess -Port $port
+    if ($proc -and $proc.ProcessName -eq 'pwsh') {
+        Write-Host "Stopping Strongbox UI server on port $port (PID $($proc.Id))..." -ForegroundColor Yellow
+        Stop-Process -Id $proc.Id -Force
     }
 }
 
@@ -52,7 +45,7 @@ if (Get-SecretVault -Name $vaultName -ErrorAction SilentlyContinue) {
     Write-Host "Vault '$vaultName' is not registered." -ForegroundColor Cyan
 }
 
-$modulePath = if ($IsWindows) { Join-Path $HOME 'Documents\PowerShell\Modules' } else { Join-Path $HOME '.local/share/powershell/Modules' }
+$modulePath = Get-StrongboxModulePath
 $moduleRoot = Join-Path $modulePath 'Strongbox'
 if (Test-Path -LiteralPath $moduleRoot) {
     Remove-Item -LiteralPath $moduleRoot -Recurse -Force

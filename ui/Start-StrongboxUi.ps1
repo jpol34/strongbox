@@ -34,11 +34,18 @@ if ($IsWindows) {
     $passwordPath = Join-Path $certDir "$HostName.pfx.pass"
     $cert = $null
     if ((Test-Path -LiteralPath $pfxPath) -and (Test-Path -LiteralPath $passwordPath)) {
-        $certPfxPassword = (Get-Content -LiteralPath $passwordPath -Raw).Trim()
-        $candidate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $certPfxPassword)
-        if ($candidate.NotAfter -gt (Get-Date)) {
-            $cert = $candidate
-            $certPfxPath = $pfxPath
+        try {
+            $certPfxPassword = (Get-Content -LiteralPath $passwordPath -Raw).Trim()
+            $candidate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfxPath, $certPfxPassword)
+            if ($candidate.NotAfter -gt (Get-Date)) {
+                $cert = $candidate
+                $certPfxPath = $pfxPath
+            }
+        } catch {
+            # A corrupt/stale PFX or a password out of sync with it shouldn't take the whole
+            # server down - fall back to plain HTTP, same as the "no cert present" case.
+            Write-Host "Couldn't load the certificate at $pfxPath ($($_.Exception.Message)) - serving plain HTTP. Re-run New-StrongboxCert.ps1 to regenerate it." -ForegroundColor DarkYellow
+            $certPfxPassword = $null
         }
     }
 }
@@ -58,20 +65,12 @@ if (-not $cert) {
 # "address already in use" exception from Pode's underlying HttpListener. Report and exit
 # cleanly instead - and don't guess whether the existing holder is a stale Strongbox server;
 # let a human decide whether to stop it.
-$existingOwnerPid = if ($IsWindows) {
-    Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-        Select-Object -First 1 -ExpandProperty OwningProcess
-} else {
-    # `ss -ltnp` output: "LISTEN 0 128 127.0.0.1:443 ... users:(("pwsh",pid=1234,fd=9))"
-    $line = (ss -ltnp 2>$null) -split "`n" | Where-Object { $_ -match ":$Port\s" } | Select-Object -First 1
-    if ($line -match 'pid=(\d+)') { [int]$matches[1] }
-}
-if ($existingOwnerPid) {
-    $existingProcess = Get-Process -Id $existingOwnerPid -ErrorAction SilentlyContinue
-    $procDesc = if ($existingProcess) { "$($existingProcess.ProcessName) (PID $($existingProcess.Id))" } else { "PID $existingOwnerPid" }
+. (Join-Path $PSScriptRoot '..\Get-StrongboxListeningProcess.ps1')
+$existingProcess = Get-StrongboxListeningProcess -Port $Port
+if ($existingProcess) {
     Write-Host ""
     Write-Host "Strongbox UI is already running on $displayUrl ($fallbackUrl)" -ForegroundColor Cyan
-    Write-Host "Held by: $procDesc" -ForegroundColor DarkGray
+    Write-Host "Held by: $($existingProcess.ProcessName) (PID $($existingProcess.Id))" -ForegroundColor DarkGray
     Write-Host ""
     exit 0
 }

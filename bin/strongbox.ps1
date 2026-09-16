@@ -17,6 +17,7 @@ try {
 } catch {
     Import-Module (Join-Path $PSScriptRoot '..\Strongbox\Strongbox.psd1') -ErrorAction Stop
 }
+. (Join-Path $PSScriptRoot '..\Get-StrongboxListeningProcess.ps1')
 
 function Show-Usage {
     @'
@@ -83,16 +84,8 @@ function Assert-RevealAllowed {
 
 function Find-StrongboxServerProcess {
     foreach ($port in 443, 80) {
-        $ownerPid = if ($IsWindows) {
-            Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue |
-                Where-Object LocalAddress -eq '127.0.0.1' | Select-Object -First 1 -ExpandProperty OwningProcess
-        } else {
-            # `ss -ltnp` output: "LISTEN 0 128 127.0.0.1:443 ... users:(("pwsh",pid=1234,fd=9))"
-            $line = (ss -ltnp 2>$null) -split "`n" | Where-Object { $_ -match "127\.0\.0\.1:$port\s" }
-            if ($line -match 'pid=(\d+)') { [int]$matches[1] }
-        }
-        if ($ownerPid) {
-            $proc = Get-Process -Id $ownerPid -ErrorAction SilentlyContinue
+        $proc = Get-StrongboxListeningProcess -Port $port
+        if ($proc) {
             return [pscustomobject]@{ Port = $port; Process = $proc }
         }
     }
@@ -128,9 +121,17 @@ function Set-StrongboxClipboard {
 
 function Get-StrongboxClipboard {
     if ($IsWindows) { return Get-Clipboard -Raw -ErrorAction SilentlyContinue }
-    foreach ($tool in @{ 'wl-paste' = @(); 'xclip' = '-selection', 'clipboard', '-o'; 'xsel' = '--clipboard' }.GetEnumerator()) {
-        if (Get-Command $tool.Key -ErrorAction SilentlyContinue) {
-            return (& $tool.Key @($tool.Value) 2>$null) -join "`n"
+    # Same tool-preference order as Set-StrongboxClipboard - reading back with a different tool
+    # than what wrote it can hit a different clipboard backend (X11 vs. Wayland) and never see
+    # the value that was actually set.
+    foreach ($tool in 'wl-paste', 'xclip', 'xsel') {
+        if (Get-Command $tool -ErrorAction SilentlyContinue) {
+            $args = switch ($tool) {
+                'xclip' { '-selection', 'clipboard', '-o' }
+                'xsel' { '--clipboard' }
+                default { @() }
+            }
+            return (& $tool @args 2>$null) -join "`n"
         }
     }
     return $null

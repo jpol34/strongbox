@@ -5,12 +5,11 @@
 #>
 $ErrorActionPreference = 'Stop'
 
+. (Join-Path $PSScriptRoot 'Get-StrongboxModulePath.ps1')
+
 $version = '1.0.0'
 $source = Join-Path $PSScriptRoot 'Strongbox'
-# Windows' user module path isn't on $env:PSModulePath by default, so it's registered below.
-# Linux/macOS's ~/.local/share/powershell/Modules is already on pwsh's default PSModulePath -
-# nothing to register there.
-$modulePath = if ($IsWindows) { Join-Path $HOME 'Documents\PowerShell\Modules' } else { Join-Path $HOME '.local/share/powershell/Modules' }
+$modulePath = Get-StrongboxModulePath
 $destRoot = Join-Path $modulePath 'Strongbox'
 $dest = Join-Path $destRoot $version
 
