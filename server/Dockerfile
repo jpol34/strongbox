@@ -26,7 +26,18 @@ RUN pwsh -NoProfile -Command " \
 
 COPY . /app/server
 
+# Fixed, stable UID/GID (not left to useradd's defaults) so ownership is reproducible across
+# rebuilds. Pre-creating /data owned by this user, before the VOLUME instruction, means a fresh
+# named volume inherits that ownership on first mount - Docker copies the image directory's
+# permissions into an empty volume at that path.
+RUN groupadd --gid 10001 strongbox \
+    && useradd --uid 10001 --gid strongbox --no-create-home --shell /usr/sbin/nologin strongbox \
+    && mkdir -p /data \
+    && chown strongbox:strongbox /data
+
 VOLUME /data
 EXPOSE 8080
+
+USER strongbox:strongbox
 
 ENTRYPOINT ["pwsh", "-NoProfile", "-File", "/app/server/Start-StrongboxSyncServer.ps1"]
