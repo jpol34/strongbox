@@ -26,8 +26,9 @@ function Push-StrongboxSecret {
 
     $pushed = 0
     foreach ($entry in $targets) {
-        $scope = if ($entry.scope) { $entry.scope } else { 'global' }
-        $project = if ($scope -eq 'project') { $entry.project } else { $null }
+        $resolved = Resolve-StrongboxManifestScope -Entry $entry
+        $scope = $resolved.Scope
+        $project = $resolved.Project
         $internalName = Resolve-StrongboxSecretStoreName -Name $entry.newName -Scope $scope -Project $project
 
         $value = Get-Secret -Name $internalName -Vault $script:StrongboxVaultName -AsPlainText -ErrorAction Stop
@@ -59,8 +60,11 @@ function Push-StrongboxSecret {
         $entry | Add-Member -NotePropertyName syncVersion -NotePropertyValue $result.version -Force
         $entry | Add-Member -NotePropertyName syncedAt -NotePropertyValue (Get-Date).ToUniversalTime().ToString('o') -Force
         $pushed++
+        # Persist after every secret, not just at the end - if a later secret in this run fails,
+        # the ones already accepted by the server must not revert to a stale local syncVersion
+        # (which would otherwise cause a spurious 409 on the next push).
+        $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
     }
 
-    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
     Write-Host "Pushed $pushed secret(s)."
 }

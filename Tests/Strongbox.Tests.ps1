@@ -520,4 +520,50 @@ Describe 'Push-StrongboxSecret / Pull-StrongboxSecret / Get-StrongboxSyncStatus'
         $status.Drift | Should -Be 'out-of-sync'
         (Get-Content -LiteralPath $manifestPath -Raw) | Should -Be $before
     }
+
+    It 'Pull-StrongboxSecret queries and writes under the project-scoped name for a synced project entry' {
+        @(
+            [pscustomobject]@{
+                oldName = 'A'; newName = 'tools.ProjExample'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                scope = 'project'; project = 'owner/myapp'; synced = $true; syncVersion = 0
+            }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+        $envelope = InModuleScope Strongbox { Protect-StrongboxSyncValue -Value 'proj-value' -Passphrase (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force) }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{
+                name = 'tools.ProjExample'; version = 1; salt = $envelope.salt; nonce = $envelope.nonce
+                tag = $envelope.tag; ciphertext = $envelope.ciphertext
+            }
+        }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Pull-StrongboxSecret -Name 'tools.ProjExample'
+
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -like '*scope=project*' -and $Uri -like '*project=owner/myapp*'
+        }
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.ProjExample::owner/myapp'
+        }
+    }
+
+    It 'Push-StrongboxSecret does not throw on a malformed scope: project entry with no project value' {
+        @(
+            [pscustomobject]@{
+                oldName = 'A'; newName = 'tools.Malformed'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                scope = 'project'; synced = $true; syncVersion = 0
+            }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-Secret { 'plaintext' }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{ name = 'tools.Malformed'; version = 1 }
+        }
+
+        { Push-StrongboxSecret } | Should -Not -Throw
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -eq 'http://127.0.0.1:8080/secrets/tools.Malformed'
+        }
+    }
 }

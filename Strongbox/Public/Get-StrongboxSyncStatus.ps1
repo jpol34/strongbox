@@ -17,8 +17,9 @@ function Get-StrongboxSyncStatus {
     }
 
     foreach ($e in $synced) {
-        $scope = if ($e.scope) { $e.scope } else { 'global' }
-        $project = if ($scope -eq 'project') { $e.project } else { $null }
+        $resolved = Resolve-StrongboxManifestScope -Entry $e
+        $scope = $resolved.Scope
+        $project = $resolved.Project
         $localVersion = if ($e.syncVersion) { [int]$e.syncVersion } else { 0 }
         $remote = $remoteByKey["$($e.newName)|$scope|$project"]
 

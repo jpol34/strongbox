@@ -9,7 +9,9 @@ function Pull-StrongboxSecret {
         always overwrites the local value with the server's, since sync's whole point is
         convergence, not backup's "never clobber what's already there" caution.
     .PARAMETER Name
-        Pull only this one secret, instead of every manifest entry with synced: true.
+        Pull only this one secret (resolved in the current project's context, same as
+        Get-StrongboxSecret - a project-scoped entry shadows a global one of the same name),
+        instead of every manifest entry with synced: true.
     #>
     param(
         [string] $Name
@@ -19,43 +21,55 @@ function Pull-StrongboxSecret {
     $manifestPath = Get-StrongboxManifestPath
     $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
 
-    $names = if ($Name) {
-        @($Name)
+    $targets = if ($Name) {
+        $target = Resolve-StrongboxSecretTarget -Name $Name
+        $existing = if ($target.Scope -eq 'project') {
+            $manifest | Where-Object { $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $target.Project } | Select-Object -First 1
+        } else {
+            $manifest | Where-Object { $_.newName -eq $Name -and (-not $_.scope -or $_.scope -eq 'global') } | Select-Object -First 1
+        }
+        @([pscustomobject]@{ Name = $Name; Scope = $target.Scope; Project = $target.Project; InternalName = $target.InternalName; Existing = $existing })
     } else {
-        @($manifest | Where-Object { $_.synced -eq $true } | Select-Object -ExpandProperty newName -Unique)
+        # Iterate the actual synced entries, not deduplicated names - a global and a
+        # project-scoped entry can share a newName and both be synced independently.
+        @($manifest | Where-Object { $_.synced -eq $true } | ForEach-Object {
+            $resolved = Resolve-StrongboxManifestScope -Entry $_
+            [pscustomobject]@{
+                Name         = $_.newName
+                Scope        = $resolved.Scope
+                Project      = $resolved.Project
+                InternalName = Resolve-StrongboxSecretStoreName -Name $_.newName -Scope $resolved.Scope -Project $resolved.Project
+                Existing     = $_
+            }
+        })
     }
 
     $pulled = 0
-    foreach ($n in $names) {
-        $existing = $manifest | Where-Object { $_.newName -eq $n -and -not ($_.scope -eq 'project' -and $_.project) } | Select-Object -First 1
-        $scope = if ($existing -and $existing.scope) { $existing.scope } else { 'global' }
-        $project = if ($scope -eq 'project') { $existing.project } else { $null }
-
-        $uri = "$($ctx.ServerUrl)/secrets/$n`?scope=$scope"
-        if ($project) { $uri += "&project=$project" }
+    foreach ($t in $targets) {
+        $uri = "$($ctx.ServerUrl)/secrets/$($t.Name)`?scope=$($t.Scope)"
+        if ($t.Project) { $uri += "&project=$($t.Project)" }
         try {
             $remote = Invoke-RestMethod -Uri $uri -Headers @{ Authorization = "Bearer $($ctx.DeviceToken)" } -ErrorAction Stop
         } catch {
             if ($_.Exception.Response.StatusCode.value__ -eq 404) {
-                [Console]::Error.WriteLine("Pull-StrongboxSecret: '$n' not found on the server, skipping.")
+                [Console]::Error.WriteLine("Pull-StrongboxSecret: '$($t.Name)' not found on the server, skipping.")
                 continue
             }
             throw
         }
 
         $value = Unprotect-StrongboxSyncValue -Envelope $remote -Passphrase $ctx.Passphrase
-        $internalName = Resolve-StrongboxSecretStoreName -Name $n -Scope $scope -Project $project
-        Set-Secret -Name $internalName -Secret $value -Vault $script:StrongboxVaultName
-        Set-SecretInfo -Name $internalName -Vault $script:StrongboxVaultName -Metadata @{ LastRotated = (Get-Date).ToUniversalTime().ToString('o') }
+        Set-Secret -Name $t.InternalName -Secret $value -Vault $script:StrongboxVaultName
+        Set-SecretInfo -Name $t.InternalName -Vault $script:StrongboxVaultName -Metadata @{ LastRotated = (Get-Date).ToUniversalTime().ToString('o') }
 
-        if ($existing) {
-            $existing | Add-Member -NotePropertyName synced -NotePropertyValue $true -Force
-            $existing | Add-Member -NotePropertyName syncVersion -NotePropertyValue $remote.version -Force
-            $existing | Add-Member -NotePropertyName syncedAt -NotePropertyValue (Get-Date).ToUniversalTime().ToString('o') -Force
+        if ($t.Existing) {
+            $t.Existing | Add-Member -NotePropertyName synced -NotePropertyValue $true -Force
+            $t.Existing | Add-Member -NotePropertyName syncVersion -NotePropertyValue $remote.version -Force
+            $t.Existing | Add-Member -NotePropertyName syncedAt -NotePropertyValue (Get-Date).ToUniversalTime().ToString('o') -Force
         } else {
             $entry = [ordered]@{
-                oldName     = $n
-                newName     = $n
+                oldName     = $t.Name
+                newName     = $t.Name
                 usedBy      = @('synced')
                 purpose     = ''
                 status      = 'keep'
@@ -66,8 +80,10 @@ function Pull-StrongboxSecret {
             $manifest += [pscustomobject]$entry
         }
         $pulled++
+        # Persist after every secret - if a later one in this run fails, the ones already
+        # pulled must not revert to a stale local syncVersion on the next status/push.
+        $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
     }
 
-    $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath
     Write-Host "Pulled $pulled secret(s)."
 }
