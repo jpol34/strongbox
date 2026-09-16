@@ -13,13 +13,14 @@ checks at each call site - no separate codebases to keep in sync.
 
 ## Get started with an AI coding agent
 
-Paste this to an agent working on a machine where Strongbox is already installed:
+Paste this to an agent working on any project on a machine that has (or should have) Strongbox:
 
-> This machine uses Strongbox for secrets (PowerShell module + CLI + web UI over
-> Microsoft.PowerShell.SecretManagement/SecretStore). Read README.md before touching any
-> credential. Get values via `strongbox get <name>` or `Get-StrongboxSecret -Name <name>` - don't
-> ask me to paste one in, don't hardcode one. Use `tools.StrongboxSelfTest` to test commands;
-> `get`/`reveal` refuse any other name when run non-interactively unless I pass `--real`.
+> This machine may have Strongbox set up for secrets (PowerShell module + CLI + web UI over
+> Microsoft.PowerShell.SecretManagement/SecretStore). Check with `strongbox help` - if it's not
+> there, tell me rather than installing it yourself. Once it's available, get values via
+> `strongbox get <name>` or `Get-StrongboxSecret -Name <name>` - don't ask me to paste one in,
+> don't hardcode one. Use `tools.StrongboxSelfTest` to test commands; `get`/`reveal` refuse any
+> other name when run non-interactively unless I pass `--real`.
 
 ## Contents
 
