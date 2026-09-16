@@ -5,8 +5,7 @@ function Resolve-StrongboxSecretStoreName {
     .DESCRIPTION
         Global-scoped names (the default) pass through unchanged, so nothing about existing
         secrets or callers changes. Project-scoped names are joined with the project slug via
-        '::', a separator not confirmed safe against every SecretStore character restriction by a
-        live test in this environment - swap it out here if that's ever verified otherwise.
+        '::', confirmed against a live SecretStore vault to round-trip correctly.
     #>
     param(
         [Parameter(Mandatory)][string] $Name,

@@ -13,9 +13,8 @@ function Test-Strongbox {
     # Keyed on (newName, scope, project) rather than newName alone, so a global and a
     # project-scoped entry that happen to share a name are distinct rather than colliding.
     $manifestNames = @($keepEntries | ForEach-Object {
-        $scope = if ($_.scope) { $_.scope } else { 'global' }
-        $project = if ($scope -eq 'project') { $_.project } else { $null }
-        Resolve-StrongboxSecretStoreName -Name $_.newName -Scope $scope -Project $project
+        $resolved = Resolve-StrongboxManifestScope -Entry $_
+        Resolve-StrongboxSecretStoreName -Name $_.newName -Scope $resolved.Scope -Project $resolved.Project
     })
 
     $vaultNames = @((Get-SecretInfo -Vault $script:StrongboxVaultName).Name)

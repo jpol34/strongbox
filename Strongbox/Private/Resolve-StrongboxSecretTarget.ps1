@@ -21,7 +21,8 @@ function Resolve-StrongboxSecretTarget {
     $projectSlug = Resolve-StrongboxProjectScope
     if ($projectSlug) {
         $projectEntry = $manifest | Where-Object {
-            $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $projectSlug
+            $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $projectSlug -and
+            $_.status -in 'keep', 'keep-unverified'
         } | Select-Object -First 1
         if ($projectEntry) {
             return [pscustomobject]@{

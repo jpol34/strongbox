@@ -17,8 +17,9 @@ function Get-StrongboxSecretList {
     foreach ($i in (Get-SecretInfo -Vault $script:StrongboxVaultName)) { $infoByName[$i.Name] = $i }
 
     foreach ($e in $entries) {
-        $scope = if ($e.scope) { $e.scope } else { 'global' }
-        $project = if ($scope -eq 'project') { $e.project } else { $null }
+        $resolved = Resolve-StrongboxManifestScope -Entry $e
+        $scope = $resolved.Scope
+        $project = $resolved.Project
         $internalName = Resolve-StrongboxSecretStoreName -Name $e.newName -Scope $scope -Project $project
         $info = $infoByName[$internalName]
         $lastRotated = $info.Metadata.LastRotated
