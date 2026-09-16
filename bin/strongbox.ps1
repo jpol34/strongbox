@@ -11,6 +11,14 @@ param(
     [Parameter(Position = 1, ValueFromRemainingArguments)] [string[]] $Rest = @()
 )
 $ErrorActionPreference = 'Stop'
+# get/reveal --stdout are documented as piping-safe ("Print a secret's value to stdout, for
+# scripting/piping"). PowerShell's warning stream writes ANSI-colored text directly onto stdout
+# in a non-interactive session (no real console attached, e.g. invoked over SSH or from a shell
+# script) rather than staying separate from it - the module's own unapproved-verb warning on
+# import was landing ahead of the actual secret value in every `strongbox get` capture. Suppress
+# warnings for the whole CLI, not just at import, since any future warning anywhere in this
+# script's execution would hit the same contamination.
+$WarningPreference = 'SilentlyContinue'
 
 try {
     Import-Module Strongbox -ErrorAction Stop
