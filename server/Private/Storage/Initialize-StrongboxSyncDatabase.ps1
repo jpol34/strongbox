@@ -5,6 +5,10 @@ function Initialize-StrongboxSyncDatabase {
         every boot.
     #>
     param([Parameter(Mandatory)][string] $DbPath)
+    # WAL lets readers proceed while a writer holds the Put-Blob/Remove-Blob transaction open;
+    # busy_timeout makes a second writer wait for that transaction instead of failing immediately
+    # with "database is locked".
+    Invoke-SqliteQuery -DataSource $DbPath -Query 'PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;'
     $query = @'
 CREATE TABLE IF NOT EXISTS secrets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

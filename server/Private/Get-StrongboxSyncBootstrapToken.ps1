@@ -14,5 +14,10 @@ function Get-StrongboxSyncBootstrapToken {
     [System.Security.Cryptography.RandomNumberGenerator]::Fill($tokenBytes)
     $token = [Convert]::ToBase64String($tokenBytes)
     Set-Content -LiteralPath $Path -Value $token -NoNewline
+    if ($IsLinux -or $IsMacOS) {
+        # This file is the sole gate on device registration - restrict it to the server process's
+        # own user in case the data volume ends up readable by more than just this container.
+        [System.IO.File]::SetUnixFileMode($Path, [System.IO.UnixFileMode]::UserRead -bor [System.IO.UnixFileMode]::UserWrite)
+    }
     return $token
 }

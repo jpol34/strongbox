@@ -89,9 +89,8 @@ Add-PodeRoute -Method Get -Path '/secrets' -ScriptBlock {
 Add-PodeRoute -Method Get -Path '/secrets/:name' -ScriptBlock {
     if (-not (Assert-StrongboxSyncDeviceAuth -DbPath '__DB_PATH__')) { return }
     $name = $WebEvent.Parameters['name']
-    $scope = if ($WebEvent.Query['scope']) { $WebEvent.Query['scope'] } else { 'global' }
-    $project = if ($WebEvent.Query['project']) { $WebEvent.Query['project'] } else { '' }
-    $blob = Get-Blob -DbPath '__DB_PATH__' -Name $name -Scope $scope -Project $project
+    $q = Get-StrongboxSyncQueryScope
+    $blob = Get-Blob -DbPath '__DB_PATH__' -Name $name -Scope $q.Scope -Project $q.Project
     if (-not $blob) {
         Set-PodeResponseStatus -Code 404
         Write-PodeJsonResponse -Value @{ error = 'not found' }
@@ -112,9 +111,25 @@ Add-PodeRoute -Method Post -Path '/secrets/:name' -ScriptBlock {
             return
         }
     }
-    $project = if ($body.project) { $body.project } else { '' }
+    if ($body.scope -notin 'global', 'project') {
+        Set-PodeResponseStatus -Code 400
+        Write-PodeJsonResponse -Value @{ error = "scope must be 'global' or 'project'" }
+        return
+    }
+    if ($body.scope -eq 'project' -and -not $body.project) {
+        Set-PodeResponseStatus -Code 400
+        Write-PodeJsonResponse -Value @{ error = 'project is required when scope is project' }
+        return
+    }
+    $expectedVersion = 0
+    if (-not [int]::TryParse([string]$body.expectedVersion, [ref] $expectedVersion)) {
+        Set-PodeResponseStatus -Code 400
+        Write-PodeJsonResponse -Value @{ error = 'expectedVersion must be an integer' }
+        return
+    }
+    $project = if ($body.scope -eq 'project') { $body.project } else { '' }
     $result = Put-Blob -DbPath '__DB_PATH__' -Name $name -Scope $body.scope -Project $project `
-        -ExpectedVersion ([int]$body.expectedVersion) -DeviceId $device.deviceId `
+        -ExpectedVersion $expectedVersion -DeviceId $device.deviceId `
         -Salt $body.salt -Nonce $body.nonce -Tag $body.tag -Ciphertext $body.ciphertext
     if ($result.conflict) {
         Set-PodeResponseStatus -Code 409
@@ -127,9 +142,8 @@ Add-PodeRoute -Method Post -Path '/secrets/:name' -ScriptBlock {
 Add-PodeRoute -Method Delete -Path '/secrets/:name' -ScriptBlock {
     if (-not (Assert-StrongboxSyncDeviceAuth -DbPath '__DB_PATH__')) { return }
     $name = $WebEvent.Parameters['name']
-    $scope = if ($WebEvent.Query['scope']) { $WebEvent.Query['scope'] } else { 'global' }
-    $project = if ($WebEvent.Query['project']) { $WebEvent.Query['project'] } else { '' }
-    $removed = Remove-Blob -DbPath '__DB_PATH__' -Name $name -Scope $scope -Project $project
+    $q = Get-StrongboxSyncQueryScope
+    $removed = Remove-Blob -DbPath '__DB_PATH__' -Name $name -Scope $q.Scope -Project $q.Project
     if (-not $removed) {
         Set-PodeResponseStatus -Code 404
         Write-PodeJsonResponse -Value @{ error = 'not found' }
@@ -139,13 +153,23 @@ Add-PodeRoute -Method Delete -Path '/secrets/:name' -ScriptBlock {
 }
 '@
 
+# Every substituted value below lands inside a single-quoted PowerShell string literal in the
+# script text - doubling any embedded single quote is that literal's own escape sequence, so an
+# operator-supplied cert path/password or a data-dir path containing a quote can't break out of
+# the literal and corrupt the generated script.
+function ConvertTo-PodeStringLiteralSafe {
+    param([string] $Value)
+    if ($null -eq $Value) { return '' }
+    $Value.Replace("'", "''")
+}
+
 $serverScriptText = $serverScriptText.
     Replace('__ENDPOINT_LINE__', $endpointLine).
     Replace('__PORT__', $Port).
-    Replace('__CERT_FILE__', $CertificateFile).
-    Replace('__CERT_PASSWORD__', $CertificatePassword).
-    Replace('__DB_PATH__', $dbPath).
-    Replace('__BOOTSTRAP_TOKEN__', $bootstrapToken)
+    Replace('__CERT_FILE__', (ConvertTo-PodeStringLiteralSafe $CertificateFile)).
+    Replace('__CERT_PASSWORD__', (ConvertTo-PodeStringLiteralSafe $CertificatePassword)).
+    Replace('__DB_PATH__', (ConvertTo-PodeStringLiteralSafe $dbPath)).
+    Replace('__BOOTSTRAP_TOKEN__', (ConvertTo-PodeStringLiteralSafe $bootstrapToken))
 
 $serverScript = [scriptblock]::Create($serverScriptText)
 Start-PodeServer -Threads 2 -ScriptBlock $serverScript
