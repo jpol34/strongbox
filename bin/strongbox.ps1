@@ -15,9 +15,9 @@ $ErrorActionPreference = 'Stop'
 try {
     Import-Module Strongbox -ErrorAction Stop
 } catch {
-    Import-Module (Join-Path $PSScriptRoot '..\Strongbox\Strongbox.psd1') -ErrorAction Stop
+    Import-Module (Join-Path $PSScriptRoot '..' 'Strongbox' 'Strongbox.psd1') -ErrorAction Stop
 }
-. (Join-Path $PSScriptRoot '..\Get-StrongboxListeningProcess.ps1')
+. (Join-Path $PSScriptRoot '..' 'Get-StrongboxListeningProcess.ps1')
 
 function Show-Usage {
     @'
@@ -274,7 +274,7 @@ switch ($Command) {
                     Write-Host "Already running on port $($existing.Port) (PID $($existing.Process.Id))."
                     return
                 }
-                $uiScript = (Resolve-Path (Join-Path $PSScriptRoot '..\ui\Start-StrongboxUi.ps1')).Path
+                $uiScript = (Resolve-Path (Join-Path $PSScriptRoot '..' 'ui' 'Start-StrongboxUi.ps1')).Path
                 if ($IsWindows) {
                     Start-Process pwsh -ArgumentList '-NoProfile', '-File', $uiScript -WindowStyle Hidden
                 } else {

@@ -1,7 +1,7 @@
 #Requires -Modules Pester
 
 BeforeAll {
-    $modulePath = Join-Path $PSScriptRoot '..\Strongbox\Strongbox.psd1'
+    $modulePath = Join-Path $PSScriptRoot '..' 'Strongbox' 'Strongbox.psd1'
     Import-Module $modulePath -Force
 
     # Every test mocks Assert-StrongboxVault as a no-op and Get-StrongboxManifestPath to point at
