@@ -13,21 +13,13 @@ checks at each call site - no separate codebases to keep in sync.
 
 ## Get started with an AI coding agent
 
-If you're pointing an agent (Claude Code or otherwise) at a machine/repo where Strongbox is
-already set up, give it a prompt like this:
+Paste this to an agent working on a machine where Strongbox is already installed:
 
-> This machine uses Strongbox for secrets - a local vault (PowerShell module + CLI + web UI over
-> Microsoft.PowerShell.SecretManagement/SecretStore). Read its README.md in full before doing
-> anything with credentials. Source any secret you need via `strongbox get <name>` (or
-> `Get-StrongboxSecret -Name <name>` in PowerShell) instead of asking me to paste one in or
-> hardcoding it in a script. When you're only checking that a command works, use the sandbox
-> secret `tools.StrongboxSelfTest` instead of a real name - `get`/`reveal` refuse to return
-> anything else when run non-interactively unless `--real` is passed explicitly.
-
-That last point matters mechanically, not just as a convention: `get`/`reveal` genuinely block on
-any name but `tools.StrongboxSelfTest` when there's no real terminal attached (see
-[CLI](#cli)) - the agent needs to know that gate exists and why, rather than getting a confusing
-refusal partway through a task.
+> This machine uses Strongbox for secrets (PowerShell module + CLI + web UI over
+> Microsoft.PowerShell.SecretManagement/SecretStore). Read README.md before touching any
+> credential. Get values via `strongbox get <name>` or `Get-StrongboxSecret -Name <name>` - don't
+> ask me to paste one in, don't hardcode one. Use `tools.StrongboxSelfTest` to test commands;
+> `get`/`reveal` refuse any other name when run non-interactively unless I pass `--real`.
 
 ## Contents
 
@@ -190,11 +182,10 @@ runs `New-StrongboxCert.ps1` once on their own machine.
 
 On Windows, it uses the built-in `New-SelfSignedCertificate` and trusts the cert in
 `Cert:\CurrentUser\Root` (no admin elevation needed, unlike `Cert:\LocalMachine\Root`) - scoped to
-exactly one cert, one hostname, one user. On Linux (no Windows cert store to use), it builds the
-cert directly via .NET's `CertificateRequest` API and exports a password-protected PFX under
-`ui/.certs/` (gitignored) for Pode's HTTPS endpoint to use directly; trusting it system-wide via
-`update-ca-certificates` requires root, so - unlike the Windows path - the command to run is
-printed rather than run for you.
+exactly one cert, one hostname, one user. Linux has no cert store to use, so the cert is built
+directly via .NET's `CertificateRequest` API and exported as a password-protected PFX under
+`ui/.certs/` (gitignored) for Pode's HTTPS endpoint. Trusting it system-wide needs
+`update-ca-certificates`, which needs root - that command is printed, not run for you.
 
 ## Naming convention & manifest.json
 
@@ -206,10 +197,10 @@ policy. It never contains secret *values*, but it does describe your own systems
 hostnames, client names, etc.), so it's gitignored rather than committed. See
 `manifest.example.json` for the schema shape with fake placeholder data.
 
-Entries also carry `scope` (`"global"`, the default, or `"project"`), `project` (a repo slug,
-present only for project-scoped entries), and the sync bookkeeping fields `synced`/`syncVersion`/
-`syncedAt` (see [Cloud sync (BYOC)](#cloud-sync-byoc)) - all optional and additive, so an entry
-with none of them is just an ordinary global, unsynced secret.
+Entries also carry `scope` (`"global"`, the default, or `"project"`), `project` (a repo slug, for
+project-scoped entries), and the sync fields `synced`/`syncVersion`/`syncedAt` (see
+[Cloud sync (BYOC)](#cloud-sync-byoc)). All optional - an entry with none of them is just an
+ordinary global, unsynced secret.
 
 ## Backup / restore
 
@@ -257,8 +248,7 @@ pwsh -NoProfile -File Uninstall-Strongbox.ps1
 ```
 
 Stops any running UI server, removes the installed module copy (`~/Documents/PowerShell/Modules`
-on Windows, `~/.local/share/powershell/Modules` on Linux - the latter needs no `PSModulePath`
-change to remove, since it's on pwsh's default path there), the `strongbox` CLI function from
+on Windows, `~/.local/share/powershell/Modules` on Linux), the `strongbox` CLI function from
 `$PROFILE`, and unregisters the `Strongbox` vault *name* - every actual secret value is untouched
 (SecretStore has one physical store per user shared by every vault name registered against it, so
 unregistering a name never touches the data; re-running the install script re-registers the same
