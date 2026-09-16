@@ -497,6 +497,31 @@ Describe 'Push-StrongboxSecret / Pull-StrongboxSecret / Get-StrongboxSyncStatus'
         $entry.syncVersion | Should -Be 1
     }
 
+    It 'Pull-StrongboxSecret -Scope project pulls a project-scoped name this device has never tracked' {
+        $envelope = InModuleScope Strongbox { Protect-StrongboxSyncValue -Value 'first-time-project-value' -Passphrase (ConvertTo-SecureString 'sync-pw' -AsPlainText -Force) }
+        Mock -ModuleName Strongbox Invoke-RestMethod {
+            [pscustomobject]@{
+                name = 'tools.NewProject'; version = 1; salt = $envelope.salt; nonce = $envelope.nonce
+                tag = $envelope.tag; ciphertext = $envelope.ciphertext
+            }
+        }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Pull-StrongboxSecret -Name 'tools.NewProject' -Scope project -Project 'owner/myapp'
+
+        Should -Invoke -ModuleName Strongbox Invoke-RestMethod -Times 1 -ParameterFilter {
+            $Uri -like '*scope=project*' -and $Uri -like '*project=owner/myapp*'
+        }
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.NewProject::owner/myapp'
+        }
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest | Where-Object newName -eq 'tools.NewProject'
+        $entry.scope | Should -Be 'project'
+        $entry.project | Should -Be 'owner/myapp'
+    }
+
     It 'Pull-StrongboxSecret skips a name that is 404 on the server' {
         Mock -ModuleName Strongbox Invoke-RestMethod {
             $resp = [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound)

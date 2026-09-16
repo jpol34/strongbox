@@ -50,7 +50,10 @@ strongbox <command> [args]
                                     Register this device against a sync server (prompts for the
                                     sync passphrase and the server's admin bootstrap token)
   sync push [name]                 Push synced secrets (or just [name]) to the server
-  sync pull [name]                 Pull synced secrets (or just [name]) from the server
+  sync pull [name] [--scope project --project X]
+                                    Pull synced secrets (or just [name]) from the server.
+                                    --scope is only needed the first time this device pulls a
+                                    project-scoped secret it has no local record of yet
   sync status [--json]             Show local vs. remote sync version drift, without changing
                                     anything
 
@@ -239,7 +242,12 @@ switch ($Command) {
                 Push-StrongboxSecret -Name $Rest[1]
             }
             'pull' {
-                Pull-StrongboxSecret -Name $Rest[1]
+                $params = @{ Name = $Rest[1] }
+                $scopeIdx = [array]::IndexOf($Rest, '--scope')
+                if ($scopeIdx -ge 0 -and $Rest.Count -gt $scopeIdx + 1) { $params.Scope = $Rest[$scopeIdx + 1] }
+                $projectIdx = [array]::IndexOf($Rest, '--project')
+                if ($projectIdx -ge 0 -and $Rest.Count -gt $projectIdx + 1) { $params.Project = $Rest[$projectIdx + 1] }
+                Pull-StrongboxSecret @params
             }
             'status' {
                 $json = $Rest -contains '--json'

@@ -12,16 +12,39 @@ function Pull-StrongboxSecret {
         Pull only this one secret (resolved in the current project's context, same as
         Get-StrongboxSecret - a project-scoped entry shadows a global one of the same name),
         instead of every manifest entry with synced: true.
+    .PARAMETER Scope
+        Pull explicitly from this scope instead of auto-detecting it from an existing manifest
+        entry. Needed the first time a device pulls a project-scoped secret it has never seen
+        before - with no local entry to infer scope from, auto-detection can only assume global.
+    .PARAMETER Project
+        The project slug for -Scope project. Defaults to the current repo (same resolution as
+        Set-StrongboxSecret) when not given.
     #>
     param(
-        [string] $Name
+        [string] $Name,
+        [ValidateSet('global', 'project')][string] $Scope,
+        [string] $Project
     )
     Assert-StrongboxVault
     $ctx = Get-StrongboxSyncContext
     $manifestPath = Get-StrongboxManifestPath
     $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
 
-    $targets = if ($Name) {
+    $targets = if ($Name -and $Scope) {
+        if ($Scope -eq 'project' -and -not $Project) { $Project = Resolve-StrongboxProjectScope }
+        if ($Scope -eq 'project' -and -not $Project) { throw "Pull-StrongboxSecret: -Scope project requires -Project, or being run inside a git repo to infer it." }
+        $resolvedProject = if ($Scope -eq 'project') { $Project } else { $null }
+        $existing = if ($Scope -eq 'project') {
+            $manifest | Where-Object { $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $resolvedProject } | Select-Object -First 1
+        } else {
+            $manifest | Where-Object { $_.newName -eq $Name -and (-not $_.scope -or $_.scope -eq 'global') } | Select-Object -First 1
+        }
+        @([pscustomobject]@{
+            Name = $Name; Scope = $Scope; Project = $resolvedProject
+            InternalName = Resolve-StrongboxSecretStoreName -Name $Name -Scope $Scope -Project $resolvedProject
+            Existing = $existing
+        })
+    } elseif ($Name) {
         $target = Resolve-StrongboxSecretTarget -Name $Name
         $existing = if ($target.Scope -eq 'project') {
             $manifest | Where-Object { $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $target.Project } | Select-Object -First 1
@@ -76,6 +99,13 @@ function Pull-StrongboxSecret {
                 synced      = $true
                 syncVersion = $remote.version
                 syncedAt    = (Get-Date).ToUniversalTime().ToString('o')
+            }
+            # A brand-new project-scoped entry must record its scope/project explicitly - left
+            # absent, it would silently normalize to global (Resolve-StrongboxManifestScope's
+            # default) the next time anything reads the manifest.
+            if ($t.Scope -eq 'project') {
+                $entry.scope = 'project'
+                $entry.project = $t.Project
             }
             $manifest += [pscustomobject]$entry
         }
