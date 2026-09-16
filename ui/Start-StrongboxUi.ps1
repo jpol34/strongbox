@@ -134,7 +134,13 @@ Add-PodeRoute -Method Get -Path '/api/secrets' -ScriptBlock {
     $manifestFile = '__MANIFEST_PATH__'
     $vaultName = 'Strongbox'
     $manifest = Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json
-    $entries = $manifest | Where-Object { $_.status -in 'keep', 'keep-unverified' }
+    # Project-scoped secrets can share a newName with a global one - only ever show the global
+    # entry here, so the UI never surfaces an ambiguous name or a project-scoped value. A
+    # scope: "project" entry with no project value is malformed and normalizes to global, same
+    # as Resolve-StrongboxManifestScope.
+    $entries = $manifest | Where-Object {
+        $_.status -in 'keep', 'keep-unverified' -and -not ($_.scope -eq 'project' -and $_.project)
+    }
 
     # Get-SecretInfo -Name scans the whole vault per call rather than doing an indexed lookup,
     # so fetching metadata one secret at a time scales linearly with vault size. Fetch all
@@ -172,6 +178,10 @@ Add-PodeRoute -Method Get -Path '/api/secrets/:name/reveal' -ScriptBlock {
         Write-PodeJsonResponse -Value @{ error = 'name must match <relay|yardi|tools|personal>.<Name>' }
         return
     }
+    # No manifest scope check needed here, unlike the other three routes: a project-scoped
+    # secret is stored under a distinct internal SecretStore name (<name>::<project>), so
+    # Get-Secret -Name $name below can never resolve to a project-scoped value in the first
+    # place - there's no ambiguity to filter out.
     Write-StrongboxAudit -Action 'REVEAL' -Name $name
     try {
         $value = Get-Secret -Name $name -Vault $vaultName -AsPlainText -ErrorAction Stop
@@ -201,7 +211,10 @@ Add-PodeRoute -Method Post -Path '/api/secrets' -ScriptBlock {
     }
 
     $manifest = @(Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json)
-    $existing = $manifest | Where-Object { $_.newName -eq $name }
+    # Only ever match the global entry - a project-scoped entry sharing this newName is left
+    # untouched, not silently overwritten or duplicated. A scope: "project" entry with no
+    # project value is malformed and normalizes to global, same as Resolve-StrongboxManifestScope.
+    $existing = $manifest | Where-Object { $_.newName -eq $name -and -not ($_.scope -eq 'project' -and $_.project) }
 
     if (-not $existing -and -not $value) {
         Set-PodeResponseStatus -Code 400
@@ -257,7 +270,7 @@ Add-PodeRoute -Method Delete -Path '/api/secrets/:name' -ScriptBlock {
     }
 
     $manifest = @(Get-Content -LiteralPath $manifestFile -Raw | ConvertFrom-Json)
-    $existing = $manifest | Where-Object { $_.newName -eq $name }
+    $existing = $manifest | Where-Object { $_.newName -eq $name -and -not ($_.scope -eq 'project' -and $_.project) }
     if (-not $existing) {
         Set-PodeResponseStatus -Code 404
         Write-PodeJsonResponse -Value @{ error = 'not found' }
@@ -265,7 +278,8 @@ Add-PodeRoute -Method Delete -Path '/api/secrets/:name' -ScriptBlock {
     }
 
     Remove-Secret -Name $name -Vault $vaultName -ErrorAction SilentlyContinue
-    $manifest = $manifest | Where-Object { $_.newName -ne $name }
+    # Only removes the global entry - a project-scoped entry sharing this newName stays.
+    $manifest = $manifest | Where-Object { -not ($_.newName -eq $name -and -not ($_.scope -eq 'project' -and $_.project)) }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $manifestFile
 
     Write-StrongboxAudit -Action 'DELETE' -Name $name
