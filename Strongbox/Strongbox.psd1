@@ -72,7 +72,9 @@ PowerShellVersion = '7.0'
 FunctionsToExport = 'Get-StrongboxSecret', 'Set-StrongboxSecret', 'Remove-StrongboxSecret',
                'Import-StrongboxSecretEnv', 'Export-StrongboxSecretUserSecrets',
                'Get-StrongboxSecretHeaders', 'Test-Strongbox', 'Get-StrongboxSecretList',
-               'Get-StrongboxStaleSecrets', 'Export-StrongboxBackup', 'Import-StrongboxBackup'
+               'Get-StrongboxStaleSecrets', 'Export-StrongboxBackup', 'Import-StrongboxBackup',
+               'Initialize-StrongboxSync', 'Push-StrongboxSecret', 'Pull-StrongboxSecret',
+               'Get-StrongboxSyncStatus'
 
 # Cmdlets to export from this module, for best performance, do not use wildcards and do not delete the entry, use an empty array if there are no cmdlets to export.
 CmdletsToExport = '*'

@@ -45,6 +45,14 @@ strongbox <command> [args]
                                     that would land in shell history and process-list args)
   backup import <path> [--force]   Restore from a backup file (prompts for the passphrase)
 
+  sync init <server-url> [--device-name X]
+                                    Register this device against a sync server (prompts for the
+                                    sync passphrase and the server's admin bootstrap token)
+  sync push [name]                 Push synced secrets (or just [name]) to the server
+  sync pull [name]                 Pull synced secrets (or just [name]) from the server
+  sync status [--json]             Show local vs. remote sync version drift, without changing
+                                    anything
+
   serve start                      Start the web UI server (idempotent - safe if already running)
   serve stop                       Stop it, if running
   serve status                     Show whether it's running and its URL
@@ -167,6 +175,33 @@ switch ($Command) {
                 Import-StrongboxBackup -Path $path -Passphrase $pass -Force:$force
             }
             default { throw "Usage: strongbox backup export|import <path> [--force]" }
+        }
+    }
+    'sync' {
+        $sub = $Rest[0]
+        switch ($sub) {
+            'init' {
+                $serverUrl = $Rest[1]
+                if (-not $serverUrl) { throw "Usage: strongbox sync init <server-url> [--device-name X]" }
+                $deviceName = $env:COMPUTERNAME
+                $dnIdx = [array]::IndexOf($Rest, '--device-name')
+                if ($dnIdx -ge 0 -and $Rest.Count -gt $dnIdx + 1) { $deviceName = $Rest[$dnIdx + 1] }
+                $syncPass = Read-Host -AsSecureString "Sync passphrase (separate from your backup passphrase - you'll need this exact value on every other device)"
+                $bootstrapToken = Read-Host -AsSecureString "Server admin bootstrap token"
+                Initialize-StrongboxSync -ServerUrl $serverUrl -DeviceName $deviceName -SyncPassphrase $syncPass -BootstrapToken $bootstrapToken
+            }
+            'push' {
+                Push-StrongboxSecret -Name $Rest[1]
+            }
+            'pull' {
+                Pull-StrongboxSecret -Name $Rest[1]
+            }
+            'status' {
+                $json = $Rest -contains '--json'
+                $result = Get-StrongboxSyncStatus
+                if ($json) { $result | ConvertTo-Json -Depth 4 } else { ConvertTo-DisplayTable $result }
+            }
+            default { throw "Usage: strongbox sync init|push|pull|status ..." }
         }
     }
     'serve' {
