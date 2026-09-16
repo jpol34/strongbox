@@ -66,6 +66,122 @@ Describe 'Remove-StrongboxSecret' {
     }
 }
 
+Describe 'Project scope resolution and shadowing' {
+    BeforeEach {
+        $manifestPath = Join-Path $TestDrive 'manifest.json'
+        @(
+            [pscustomobject]@{ oldName = 'A'; newName = 'tools.Example'; purpose = 'global one'; status = 'keep' }
+            [pscustomobject]@{ oldName = 'B'; newName = 'tools.Example'; purpose = 'project one'; status = 'keep'; scope = 'project'; project = 'owner/myapp' }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-StrongboxManifestPath { $manifestPath }
+    }
+
+    It 'Get-StrongboxSecret reads the project-scoped internal name when inside that project' {
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+        Mock -ModuleName Strongbox Get-Secret { 'project-value' }
+
+        Get-StrongboxSecret -Name 'tools.Example' | Should -Be 'project-value'
+        Should -Invoke -ModuleName Strongbox Get-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example::owner/myapp'
+        }
+    }
+
+    It 'Get-StrongboxSecret falls back to the global entry outside that project' {
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { $null }
+        Mock -ModuleName Strongbox Get-Secret { 'global-value' }
+
+        Get-StrongboxSecret -Name 'tools.Example' | Should -Be 'global-value'
+        Should -Invoke -ModuleName Strongbox Get-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example'
+        }
+    }
+
+    It 'Get-StrongboxSecret falls back to the global entry inside a different project' {
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/otherapp' }
+        Mock -ModuleName Strongbox Get-Secret { 'global-value' }
+
+        Get-StrongboxSecret -Name 'tools.Example' | Should -Be 'global-value'
+        Should -Invoke -ModuleName Strongbox Get-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example'
+        }
+    }
+
+    It 'Remove-StrongboxSecret removes the project-scoped internal name when inside that project' {
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+        Mock -ModuleName Strongbox Remove-Secret { }
+
+        Remove-StrongboxSecret -Name 'tools.Example'
+        Should -Invoke -ModuleName Strongbox Remove-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example::owner/myapp'
+        }
+    }
+}
+
+Describe 'Resolve-StrongboxSecretStoreName' {
+    It 'returns the name unchanged for global scope' {
+        InModuleScope Strongbox {
+            Resolve-StrongboxSecretStoreName -Name 'tools.Example' -Scope 'global' | Should -Be 'tools.Example'
+        }
+    }
+
+    It 'joins name and project with :: for project scope' {
+        InModuleScope Strongbox {
+            Resolve-StrongboxSecretStoreName -Name 'tools.Example' -Scope 'project' -Project 'owner/myapp' |
+                Should -Be 'tools.Example::owner/myapp'
+        }
+    }
+
+    It 'throws for project scope without a project' {
+        InModuleScope Strongbox {
+            { Resolve-StrongboxSecretStoreName -Name 'tools.Example' -Scope 'project' } | Should -Throw
+        }
+    }
+}
+
+Describe 'Set-StrongboxSecret project scope' {
+    It 'writes under the project-scoped internal name when -Scope Project is given' {
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Set-StrongboxSecret -Name 'tools.Example' -Value 'abc' -Scope Project -Project 'owner/myapp'
+
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example::owner/myapp' -and $Secret -eq 'abc'
+        }
+    }
+
+    It 'infers the project from the current repo when -Project is not given' {
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+
+        Set-StrongboxSecret -Name 'tools.Example' -Value 'abc' -Scope Project
+
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example::owner/myapp'
+        }
+    }
+
+    It 'throws when -Scope Project is given outside any repo and without -Project' {
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { $null }
+
+        { Set-StrongboxSecret -Name 'tools.Example' -Value 'abc' -Scope Project } | Should -Throw
+    }
+
+    It 'defaults to global scope, unchanged from prior behavior, when -Scope is not given' {
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+
+        Set-StrongboxSecret -Name 'tools.Example' -Value 'abc'
+
+        Should -Invoke -ModuleName Strongbox Set-Secret -Times 1 -ParameterFilter {
+            $Name -eq 'tools.Example' -and $Secret -eq 'abc'
+        }
+    }
+}
+
 Describe 'Import-StrongboxSecretEnv' {
     It 'sets one process environment variable per map entry' {
         Mock -ModuleName Strongbox Get-Secret { 'value-for-' + $Name }
@@ -119,6 +235,38 @@ Describe 'Get-StrongboxSecretList / Get-StrongboxStaleSecrets' {
         $stale.Count | Should -Be 1
         $stale[0].Name | Should -Be 'tools.Stale'
     }
+
+    It 'defaults Scope/Synced/SyncVersion/SyncedAt when the manifest entry has none of those fields' {
+        $entry = Get-StrongboxSecretList | Where-Object Name -eq 'tools.Fresh'
+        $entry.Scope | Should -Be 'global'
+        $entry.Project | Should -BeNullOrEmpty
+        $entry.Synced | Should -BeFalse
+        $entry.SyncVersion | Should -Be 0
+        $entry.SyncedAt | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-StrongboxSecretList scope/sync properties' {
+    It 'surfaces scope/project/sync fields from a project-scoped manifest entry' {
+        $manifestPath = Join-Path $TestDrive 'manifest.json'
+        @(
+            [pscustomobject]@{
+                oldName = $null; newName = 'tools.Example'; usedBy = @('x'); purpose = 'p'; status = 'keep'
+                scope = 'project'; project = 'owner/myapp'; synced = $true; syncVersion = 3; syncedAt = '2026-08-01T12:00:00Z'
+            }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-StrongboxManifestPath { $manifestPath }
+        Mock -ModuleName Strongbox Get-SecretInfo {
+            @([pscustomobject]@{ Name = 'tools.Example::owner/myapp'; Metadata = @{} })
+        }
+
+        $entry = Get-StrongboxSecretList
+        $entry.Scope | Should -Be 'project'
+        $entry.Project | Should -Be 'owner/myapp'
+        $entry.Synced | Should -BeTrue
+        $entry.SyncVersion | Should -Be 3
+        ([datetime]$entry.SyncedAt).ToUniversalTime() | Should -Be ([datetime]'2026-08-01T12:00:00Z').ToUniversalTime()
+    }
 }
 
 Describe 'Test-Strongbox' {
@@ -148,6 +296,23 @@ Describe 'Test-Strongbox' {
     It 'throws when the manifest references a secret missing from the vault' {
         Mock -ModuleName Strongbox Get-SecretInfo { @() }
         { Test-Strongbox } | Should -Throw
+    }
+
+    It 'does not collide a global and a project-scoped entry sharing the same newName' {
+        $manifestPath = Join-Path $TestDrive 'manifest.json'
+        @(
+            [pscustomobject]@{ oldName = 'A'; newName = 'tools.Example'; purpose = 'global'; status = 'keep' }
+            [pscustomobject]@{ oldName = 'B'; newName = 'tools.Example'; purpose = 'project'; status = 'keep'; scope = 'project'; project = 'owner/myapp' }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-StrongboxManifestPath { $manifestPath }
+        Mock -ModuleName Strongbox Get-SecretInfo {
+            @(
+                [pscustomobject]@{ Name = 'tools.Example' }
+                [pscustomobject]@{ Name = 'tools.Example::owner/myapp' }
+            )
+        }
+
+        { Test-Strongbox } | Should -Not -Throw
     }
 }
 

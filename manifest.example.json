@@ -20,6 +20,20 @@
     "status": "keep"
   },
   {
+    "oldName": null,
+    "newName": "myapp.Api_ReadonlyKey",
+    "usedBy": [
+      "reporting MCP only, staging environment"
+    ],
+    "purpose": "Read-only API key for the reporting integration - staging override",
+    "status": "keep",
+    "scope": "project",
+    "project": "owner/myapp",
+    "synced": true,
+    "syncVersion": 2,
+    "syncedAt": "2026-08-01T12:00:00Z"
+  },
+  {
     "oldName": "ExampleThirdParty_ApiKey",
     "newName": "vendor.ThirdParty_ApiKey",
     "usedBy": [
