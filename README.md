@@ -2,8 +2,9 @@
 
 A machine-level secrets vault for personal/small-team dev work: a thin PowerShell module over
 `Microsoft.PowerShell.SecretManagement` + `Microsoft.PowerShell.SecretStore`, plus a CLI and a
-local web UI on top of it. No cloud, no account, no subscription - everything lives in your own
-user profile.
+local web UI on top of it. No account, no subscription, no third-party service - everything lives
+in your own user profile unless you opt into [cloud sync](#cloud-sync-byoc) against a server you
+run yourself.
 
 **Windows and Linux**, each a full local peer - not a sync-only client of the other. Windows uses
 the Windows certificate store, `Get-NetTCPConnection`, and the Windows hosts file path; Linux uses
@@ -40,10 +41,14 @@ Paste this to an agent working on any project on a machine that has (or should h
 ## Features
 
 - Get/set/remove secrets from any PowerShell session, on any repo on the machine
-- A `strongbox` CLI (`list`, `get`, `set`, `reveal`, `backup`, `serve`, ...) for people who don't
-  want to remember cmdlet names
+- Windows and Linux, each a full local vault - not one syncing off the other
+- A `strongbox` CLI (`list`, `get`, `set`, `reveal`, `backup`, `serve`, `sync`, ...) for people who
+  don't want to remember cmdlet names
 - A local, bearer-token-gated web UI (optional HTTPS with a real "Secure" indicator) for browsing,
   editing, and revealing secrets
+- Global and project-scoped secrets - a project can override a global secret with its own value
+- Opt-in, per-secret, zero-knowledge cloud sync against a server you host yourself (see
+  [Cloud sync (BYOC)](#cloud-sync-byoc)) - nothing syncs unless you turn it on for that secret
 - Drift checking (`Test-Strongbox`) - catches a manifest and vault that have quietly gone out of
   sync
 - Rotation-policy tracking with a staleness check, in the CLI, the module, and the UI
@@ -145,7 +150,7 @@ anywhere on `$env:Path` silently executable by bare name.
 ## Web UI
 
 ```powershell
-pwsh -NoProfile -File ui\Start-StrongboxUi.ps1
+pwsh -NoProfile -File ui/Start-StrongboxUi.ps1
 ```
 
 Or `strongbox serve start` / `/strongbox` from Claude Code - either way it's idempotent (safe to
@@ -155,7 +160,7 @@ Binds `127.0.0.1` only - no external network exposure either way. The auth token
 once and persisted to `.token` (gitignored); the browser saves it to `localStorage` after first
 use, so you shouldn't need to paste it again. Delete `.token` to force a fresh one.
 
-Every reveal, add/update, and delete is appended to `ui\audit.log` (gitignored, local-only) -
+Every reveal, add/update, and delete is appended to `ui/audit.log` (gitignored, local-only) -
 who/when/what, never values.
 
 ### HTTPS + a friendly hostname
@@ -191,7 +196,7 @@ directly via .NET's `CertificateRequest` API and exported as a password-protecte
 ## Naming convention & manifest.json
 
 Secret names are prefixed by ownership: `relay.`, `yardi.`, `tools.`, `personal.` (change the
-regex in `ui\Start-StrongboxUi.ps1`'s POST/reveal/delete routes for different prefixes).
+regex in `ui/Start-StrongboxUi.ps1`'s POST/reveal/delete routes for different prefixes).
 
 `manifest.json` is your own local record of every secret's purpose, consumers, and rotation
 policy. It never contains secret *values*, but it does describe your own systems (internal
@@ -260,12 +265,12 @@ entry, this repo directory, or `manifest.json` - remove those yourself if wanted
 
 ```powershell
 Install-Module Pester -MinimumVersion 5.0 -Scope CurrentUser -Force -SkipPublisherCheck
-Invoke-Pester -Path Tests\Strongbox.Tests.ps1
+Invoke-Pester -Path Tests/Strongbox.Tests.ps1
 ```
 
 Covers the module's public functions against mocked `Get-Secret`/`Set-Secret`/`Get-SecretInfo`/
 `Set-SecretInfo` calls (never a real vault) and a temp-file manifest. No Pester coverage exists yet
-for the web UI backend (`ui\Start-StrongboxUi.ps1`).
+for the web UI backend (`ui/Start-StrongboxUi.ps1`).
 
 ## Known issues
 
