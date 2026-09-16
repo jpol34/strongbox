@@ -90,31 +90,54 @@ strongbox <command> [args]
 
 $script:SandboxSecretName = 'tools.StrongboxSelfTest'
 
-function Assert-RevealAllowed {
+function Assert-StrongboxNonInteractiveGate {
     <#
-    Prevents a script or automated agent from grabbing a real secret when it's only trying to
-    verify a command works. The sandbox secret is always safe to touch; anything else requires
-    either a real interactive terminal (a human consciously typing this) or an explicit --real
-    flag.
+    Shared gate: prevents a script or automated agent from grabbing/ingesting a real secret when
+    it's only trying to verify a command works. The sandbox secret is always safe to touch;
+    anything else requires either a real interactive terminal (a human consciously typing this)
+    or an explicit --real flag. $Verb is just the action name for the thrown message (e.g.
+    'reveal', 'read the clipboard for', 'prompt for').
     #>
-    param([string] $Name, [string[]] $ArgList)
+    param([string] $Name, [string[]] $ArgList, [string] $Verb)
     if ($Name -eq $script:SandboxSecretName) { return }
     if (Test-InteractiveTerminal) { return }
     if ($ArgList -contains '--real') { return }
-    throw "Refusing to reveal '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+    throw "Refusing to $Verb '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+}
+
+function Assert-RevealAllowed {
+    param([string] $Name, [string[]] $ArgList)
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'reveal'
 }
 
 function Assert-ClipboardReadAllowed {
-    <#
-    Same shape as Assert-RevealAllowed, but for reading the clipboard on 'set --from-clipboard'.
-    Clipboard content is ambient - whatever happens to be sitting there - so an automated caller
-    shouldn't be able to silently ingest it any more than it should silently reveal a real secret.
-    #>
+    # Clipboard content is ambient - whatever happens to be sitting there - so an automated
+    # caller shouldn't be able to silently ingest it any more than it should silently reveal a
+    # real secret.
     param([string] $Name, [string[]] $ArgList)
-    if ($Name -eq $script:SandboxSecretName) { return }
-    if (Test-InteractiveTerminal) { return }
-    if ($ArgList -contains '--real') { return }
-    throw "Refusing to read the clipboard for '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'read the clipboard for'
+}
+
+function Assert-InteractivePromptAllowed {
+    # Same gate, for the bare masked-prompt path: a non-interactive caller that omitted a value
+    # entirely should get a fast, clear error, not a Read-Host call that hangs (or silently reads
+    # garbage) against a non-terminal stdin.
+    param([string] $Name, [string[]] $ArgList)
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'prompt for'
+}
+
+$script:StrongboxSetFlagNames = '--rotation-days', '--owner', '--scope', '--project', '--from-clipboard'
+
+function Test-StrongboxPositionalValueGiven {
+    <#
+    True when $Rest[1] is an actual positional value (including the '-' stdin sentinel) rather
+    than the next recognized flag - i.e. the value was omitted and 'set' should fall through to
+    --from-clipboard/interactive-prompt handling. Matches known flag names exactly rather than a
+    '--*' wildcard, so a literal secret value that happens to start with '--' (e.g. a token) is
+    still treated as the given value, not misread as "no value given".
+    #>
+    param([string[]] $Rest)
+    $Rest.Count -gt 1 -and $Rest[1] -notin $script:StrongboxSetFlagNames
 }
 
 function ConvertFrom-StrongboxSecureString {
@@ -213,6 +236,7 @@ function Resolve-StrongboxSetValue {
     if ($PositionalValueGiven) {
         return $PositionalValue
     }
+    Assert-InteractivePromptAllowed -Name $Name -ArgList $ArgList
     $secure = Read-Host -AsSecureString "Value for '$Name'"
     return ConvertFrom-StrongboxSecureString -SecureString $secure
 }
@@ -260,11 +284,13 @@ switch ($Command) {
     }
     'set' {
         $name = $Rest[0]
-        if (-not $name) { throw "Usage: strongbox set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X] [--scope project [--project X]]" }
-        $positionalGiven = $Rest.Count -gt 1 -and $Rest[1] -notlike '--*'
+        $usage = "Usage: strongbox set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X] [--scope project [--project X]]"
+        if (-not $name) { throw $usage }
+        $positionalGiven = Test-StrongboxPositionalValueGiven -Rest $Rest
         $value = Resolve-StrongboxSetValue -Name $name `
             -PositionalValue $(if ($positionalGiven) { $Rest[1] }) `
             -ArgList $Rest -PositionalValueGiven:$positionalGiven
+        if (-not $value) { throw $usage }
         $params = @{ Name = $name; Value = $value }
         $rdIdx = [array]::IndexOf($Rest, '--rotation-days')
         if ($rdIdx -ge 0 -and $Rest.Count -gt $rdIdx + 1) { $params.RotationDays = [int]$Rest[$rdIdx + 1] }

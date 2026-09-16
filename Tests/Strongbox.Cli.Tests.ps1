@@ -24,10 +24,19 @@ Describe 'Resolve-StrongboxSetValue' {
     }
 
     It 'prompts interactively when no value is given at all' {
+        Mock Test-InteractiveTerminal { $true }
         $secure = ConvertTo-SecureString -String 'typed-value' -AsPlainText -Force
         Mock Read-Host { $secure }
         Resolve-StrongboxSetValue -Name 'tools.Example' -ArgList @('tools.Example') | Should -Be 'typed-value'
         Should -Invoke Read-Host -Times 1
+    }
+
+    It 'refuses to prompt in a non-interactive session without --real' {
+        Mock Test-InteractiveTerminal { $false }
+        Mock Read-Host { }
+        { Resolve-StrongboxSetValue -Name 'personal.Example' -ArgList @('personal.Example') } |
+            Should -Throw '*--real*'
+        Should -Invoke Read-Host -Times 0
     }
 
     It 'reads from the clipboard when --from-clipboard is passed, and clears it after' {
@@ -43,12 +52,13 @@ Describe 'Resolve-StrongboxSetValue' {
 
     It "does not mistake '--from-clipboard' sitting where a positional value would be for a literal value" {
         # $Rest = @('tools.Example', '--from-clipboard') - the '--from-clipboard' token must route
-        # to the clipboard branch, not be treated as PositionalValue.
+        # to the clipboard branch, not be treated as PositionalValue. Exercises the real dispatch
+        # helper (Test-StrongboxPositionalValueGiven), not a duplicated expression.
         Mock Assert-ClipboardReadAllowed { }
         Mock Get-StrongboxClipboard { 'clipboard-value' }
         Mock Set-StrongboxClipboard { }
         $rest = @('tools.Example', '--from-clipboard')
-        $positionalGiven = $rest.Count -gt 1 -and $rest[1] -notlike '--*'
+        $positionalGiven = Test-StrongboxPositionalValueGiven -Rest $rest
 
         $positionalGiven | Should -BeFalse
         Resolve-StrongboxSetValue -Name 'tools.Example' `
@@ -67,6 +77,29 @@ Describe 'Resolve-StrongboxSetValue' {
         Mock Assert-ClipboardReadAllowed { throw "Refusing to read the clipboard for 'personal.Example' in a non-interactive session without --real." }
         { Resolve-StrongboxSetValue -Name 'personal.Example' -ArgList @('personal.Example', '--from-clipboard') } |
             Should -Throw '*without --real*'
+    }
+}
+
+Describe 'Test-StrongboxPositionalValueGiven' {
+    It 'is true for an ordinary literal value' {
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example', 'abc') | Should -BeTrue
+    }
+
+    It "is true for the '-' stdin sentinel" {
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example', '-') | Should -BeTrue
+    }
+
+    It 'is true for a literal value that happens to start with -- (not a recognized flag name)' {
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example', '--abc123token') | Should -BeTrue
+    }
+
+    It 'is false when the next token is a recognized flag (value omitted)' {
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example', '--owner') | Should -BeFalse
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example', '--from-clipboard') | Should -BeFalse
+    }
+
+    It 'is false when no second element exists at all' {
+        Test-StrongboxPositionalValueGiven -Rest @('tools.Example') | Should -BeFalse
     }
 }
 
