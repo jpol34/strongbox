@@ -42,21 +42,27 @@ strongbox <command> [args]
   check                            Drift check: manifest vs. vault
 
   get <name> [--real]               Print a secret's value to stdout (for scripting/piping)
-  set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]
-                                    Write a secret. --scope project writes a project-scoped
-                                    secret that shadows any global one of the same name while
-                                    inside that project; --project defaults to the current repo
-                                    when not given
+  set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X]
+             [--scope project [--project X]]
+                                    Write a secret. Omit <value> for a masked interactive prompt
+                                    (no echo); pass '-' to read the value from stdin, for
+                                    scripts; --from-clipboard reads it off the OS clipboard and
+                                    clears the clipboard afterward (gated the same way get/reveal
+                                    are below - clipboard content is ambient, not something an
+                                    automated caller should silently grab). --scope project
+                                    writes a project-scoped secret that shadows any global one of
+                                    the same name while inside that project; --project defaults
+                                    to the current repo when not given
   remove <name> [--force]           Delete a secret (prompts for confirmation unless --force)
   reveal <name> [--stdout] [--real] Copy a secret to the clipboard (auto-clears after 30s);
                                     --stdout prints it instead, for cases where you truly need
                                     that (accepts the same exposure tradeoff -reveal in the web
                                     UI/browser copy button already accepts)
 
-  'get'/'reveal' refuse to output anything but tools.StrongboxSelfTest (a permanent, harmless
-  sandbox value - always fine to touch) when run non-interactively (no real terminal attached -
-  e.g. from a script or an AI agent's tool calls) unless you pass --real. A human typing at a
-  real interactive prompt never sees this gate.
+  'get'/'reveal'/'set --from-clipboard' refuse to touch anything but tools.StrongboxSelfTest (a
+  permanent, harmless sandbox value - always fine to touch) when run non-interactively (no real
+  terminal attached - e.g. from a script or an AI agent's tool calls) unless you pass --real. A
+  human typing at a real interactive prompt never sees this gate.
 
   backup export <path>             Back up manifest + every secret value to an encrypted file
                                     (prompts for a passphrase - never pass it as an argument,
@@ -84,18 +90,69 @@ strongbox <command> [args]
 
 $script:SandboxSecretName = 'tools.StrongboxSelfTest'
 
-function Assert-RevealAllowed {
+function Assert-StrongboxNonInteractiveGate {
     <#
-    Prevents a script or automated agent from grabbing a real secret when it's only trying to
-    verify a command works. The sandbox secret is always safe to touch; anything else requires
-    either a real interactive terminal (a human consciously typing this) or an explicit --real
-    flag.
+    Shared gate: prevents a script or automated agent from grabbing/ingesting a real secret when
+    it's only trying to verify a command works. The sandbox secret is always safe to touch;
+    anything else requires either a real interactive terminal (a human consciously typing this)
+    or an explicit --real flag. $Verb is just the action name for the thrown message (e.g.
+    'reveal', 'read the clipboard for', 'prompt for').
     #>
-    param([string] $Name, [string[]] $ArgList)
+    param([string] $Name, [string[]] $ArgList, [string] $Verb)
     if ($Name -eq $script:SandboxSecretName) { return }
     if (Test-InteractiveTerminal) { return }
     if ($ArgList -contains '--real') { return }
-    throw "Refusing to reveal '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+    throw "Refusing to $Verb '$Name' in a non-interactive session without --real. Use '$script:SandboxSecretName' to test commands safely, or pass --real if you genuinely mean this one."
+}
+
+function Assert-RevealAllowed {
+    param([string] $Name, [string[]] $ArgList)
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'reveal'
+}
+
+function Assert-ClipboardReadAllowed {
+    # Clipboard content is ambient - whatever happens to be sitting there - so an automated
+    # caller shouldn't be able to silently ingest it any more than it should silently reveal a
+    # real secret.
+    param([string] $Name, [string[]] $ArgList)
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'read the clipboard for'
+}
+
+function Assert-InteractivePromptAllowed {
+    # Same gate, for the bare masked-prompt path: a non-interactive caller that omitted a value
+    # entirely should get a fast, clear error, not a Read-Host call that hangs (or silently reads
+    # garbage) against a non-terminal stdin.
+    param([string] $Name, [string[]] $ArgList)
+    Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'prompt for'
+}
+
+$script:StrongboxSetFlagNames = '--rotation-days', '--owner', '--scope', '--project', '--from-clipboard'
+
+function Test-StrongboxPositionalValueGiven {
+    <#
+    True when $Rest[1] is an actual positional value (including the '-' stdin sentinel) rather
+    than the next recognized flag - i.e. the value was omitted and 'set' should fall through to
+    --from-clipboard/interactive-prompt handling. Matches known flag names exactly rather than a
+    '--*' wildcard, so a literal secret value that happens to start with '--' (e.g. a token) is
+    still treated as the given value, not misread as "no value given".
+    #>
+    param([string[]] $Rest)
+    $Rest.Count -gt 1 -and $Rest[1] -notin $script:StrongboxSetFlagNames
+}
+
+function ConvertFrom-StrongboxSecureString {
+    param([System.Security.SecureString] $SecureString)
+    $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($SecureString)
+    try {
+        [System.Runtime.InteropServices.Marshal]::PtrToStringUni($ptr)
+    } finally {
+        [System.Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($ptr)
+    }
+}
+
+function Read-StrongboxStdinValue {
+    # Its own function purely so it's mockable in tests, rather than calling [Console]::In directly.
+    [Console]::In.ReadToEnd().TrimEnd("`r", "`n")
 }
 
 function Find-StrongboxServerProcess {
@@ -153,6 +210,37 @@ function Get-StrongboxClipboard {
     return $null
 }
 
+function Resolve-StrongboxSetValue {
+    <#
+    Resolves the plaintext value for 'strongbox set' from whichever source was used: a literal
+    positional value, the '-' stdin sentinel, --from-clipboard, or - when none of those apply - a
+    masked interactive prompt.
+    #>
+    param(
+        [string] $Name,
+        [string] $PositionalValue,
+        [string[]] $ArgList,
+        [switch] $PositionalValueGiven
+    )
+    if ($ArgList -contains '--from-clipboard') {
+        Assert-ClipboardReadAllowed -Name $Name -ArgList $ArgList
+        $value = Get-StrongboxClipboard
+        if (-not $value) { throw "Clipboard is empty or unreadable." }
+        Set-StrongboxClipboard -Value ''
+        Write-Host "Note: the app you copied '$Name' from may already have left its own copy in Windows Clipboard History / cloud clipboard sync - Strongbox cannot retroactively scrub that." -ForegroundColor Yellow
+        return $value
+    }
+    if ($PositionalValueGiven -and $PositionalValue -eq '-') {
+        return Read-StrongboxStdinValue
+    }
+    if ($PositionalValueGiven) {
+        return $PositionalValue
+    }
+    Assert-InteractivePromptAllowed -Name $Name -ArgList $ArgList
+    $secure = Read-Host -AsSecureString "Value for '$Name'"
+    return ConvertFrom-StrongboxSecureString -SecureString $secure
+}
+
 function Set-ClipboardWithAutoClear {
     param([string] $Value, [int] $ClearAfterSeconds = 30)
     Set-StrongboxClipboard -Value $Value
@@ -196,8 +284,13 @@ switch ($Command) {
     }
     'set' {
         $name = $Rest[0]
-        $value = $Rest[1]
-        if (-not $name -or -not $value) { throw "Usage: strongbox set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]" }
+        $usage = "Usage: strongbox set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X] [--scope project [--project X]]"
+        if (-not $name) { throw $usage }
+        $positionalGiven = Test-StrongboxPositionalValueGiven -Rest $Rest
+        $value = Resolve-StrongboxSetValue -Name $name `
+            -PositionalValue $(if ($positionalGiven) { $Rest[1] }) `
+            -ArgList $Rest -PositionalValueGiven:$positionalGiven
+        if (-not $value) { throw $usage }
         $params = @{ Name = $name; Value = $value }
         $rdIdx = [array]::IndexOf($Rest, '--rotation-days')
         if ($rdIdx -ge 0 -and $Rest.Count -gt $rdIdx + 1) { $params.RotationDays = [int]$Rest[$rdIdx + 1] }

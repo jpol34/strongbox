@@ -107,7 +107,12 @@ strongbox stale [--json]                   List only secrets past their rotation
 strongbox check                            Drift check: manifest vs. vault
 
 strongbox get <name> [--real]               Print a secret's value to stdout (for scripting)
-strongbox set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]
+strongbox set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X]
+               [--scope project [--project X]]
+                                            Omit <value> for a masked interactive prompt (no
+                                            echo); '-' reads the value from stdin, for scripts;
+                                            --from-clipboard reads it off the OS clipboard and
+                                            clears it after (gated like get/reveal below).
                                             --scope project writes a project-scoped secret that
                                             shadows a global one of the same name inside that
                                             project; --project defaults to the current repo
@@ -137,13 +142,16 @@ strongbox serve start|stop|status          Manage the local web UI server
 modal's threat model - `get` is the deliberate exception, since its whole purpose is scripting/
 piping the value somewhere.
 
-**Safeguard against scripts/agents grabbing the wrong secret.** `get`/`reveal` refuse to touch
-anything except the permanent sandbox secret `tools.StrongboxSelfTest` (auto-provisioned by
-`Register-StrongboxVault.ps1` with a harmless placeholder value) when run **non-interactively** (no
-real terminal attached - a script, or an AI coding agent's tool calls), unless you pass `--real`.
-A human typing at a real interactive prompt never sees this gate. It exists to prevent a script
-or automated agent from grabbing a real secret when it's only trying to verify a command works -
-`tools.StrongboxSelfTest` removes any reason to reach for a real name just to test with.
+**Safeguard against scripts/agents grabbing the wrong secret.** `get`/`reveal`/`set --from-clipboard`
+refuse to touch anything except the permanent sandbox secret `tools.StrongboxSelfTest`
+(auto-provisioned by `Register-StrongboxVault.ps1` with a harmless placeholder value) when run
+**non-interactively** (no real terminal attached - a script, or an AI coding agent's tool calls),
+unless you pass `--real`. A human typing at a real interactive prompt never sees this gate. It
+exists to prevent a script or automated agent from grabbing a real secret when it's only trying to
+verify a command works (or, for `set --from-clipboard`, from silently ingesting whatever happens to
+be sitting on the clipboard) - `tools.StrongboxSelfTest` removes any reason to reach for a real name
+just to test with. `set <name> <value>`/`set <name> -` are unaffected by this gate - writing a
+secret from a script or piped stdin is the normal, intended scripting use case.
 
 Registered as a bare `strongbox` command by `Install-StrongboxPrerequisites.ps1` (or run
 `Install-StrongboxCli.ps1` on its own) - this adds a small forwarding function to `$PROFILE`
