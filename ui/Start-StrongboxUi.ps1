@@ -100,12 +100,15 @@ $manifestPath = (Resolve-Path (Join-Path $PSScriptRoot '..' 'manifest.json')).Pa
 $publicDir = (Resolve-Path (Join-Path $PSScriptRoot 'public')).Path
 $auditLogPath = Join-Path $PSScriptRoot 'audit.log'
 
+# Every route below is pinned to this endpoint by name. Pode binds a route with no -EndpointName
+# to *all* endpoints, so naming is what keeps the real routes off any additional listener added
+# later (e.g. a plaintext one) rather than silently serving the UI over it.
 $endpointLine = if ($protocol -eq 'Https' -and $IsWindows) {
-    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -CertificateThumbprint '__CERT_THUMBPRINT__' -CertificateStoreName My -CertificateStoreLocation CurrentUser"
+    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -Name 'main' -CertificateThumbprint '__CERT_THUMBPRINT__' -CertificateStoreName My -CertificateStoreLocation CurrentUser"
 } elseif ($protocol -eq 'Https') {
-    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -Certificate '__CERT_FILE__' -CertificatePassword '__CERT_PASSWORD__'"
+    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Https -Name 'main' -Certificate '__CERT_FILE__' -CertificatePassword '__CERT_PASSWORD__'"
 } else {
-    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Http"
+    "Add-PodeEndpoint -Address 127.0.0.1 -Port __PORT__ -Protocol Http -Name 'main'"
 }
 $hostPattern = [regex]::Escape($HostName)
 
@@ -154,7 +157,7 @@ Add-PodeMiddleware -Name 'AuthAndOrigin' -ScriptBlock {
     return $true
 } -Route '/api/*'
 
-Add-PodeRoute -Method Get -Path '/api/secrets' -ScriptBlock {
+Add-PodeRoute -Method Get -Path '/api/secrets' -EndpointName 'main' -ScriptBlock {
     Add-PodeHeader -Name 'Cache-Control' -Value 'no-store'
     $manifestFile = '__MANIFEST_PATH__'
     $vaultName = 'Strongbox'
@@ -195,7 +198,7 @@ Add-PodeRoute -Method Get -Path '/api/secrets' -ScriptBlock {
     Write-PodeJsonResponse -Value @($result)
 }
 
-Add-PodeRoute -Method Get -Path '/api/secrets/:name/reveal' -ScriptBlock {
+Add-PodeRoute -Method Get -Path '/api/secrets/:name/reveal' -EndpointName 'main' -ScriptBlock {
     $vaultName = 'Strongbox'
     $name = $WebEvent.Parameters['name']
     if ($name -notmatch '^(relay|yardi|tools|personal)\.[A-Za-z0-9_]+$') {
@@ -217,7 +220,7 @@ Add-PodeRoute -Method Get -Path '/api/secrets/:name/reveal' -ScriptBlock {
     }
 }
 
-Add-PodeRoute -Method Post -Path '/api/secrets' -ScriptBlock {
+Add-PodeRoute -Method Post -Path '/api/secrets' -EndpointName 'main' -ScriptBlock {
     $manifestFile = '__MANIFEST_PATH__'
     $vaultName = 'Strongbox'
     $body = $WebEvent.Data
@@ -284,7 +287,7 @@ Add-PodeRoute -Method Post -Path '/api/secrets' -ScriptBlock {
     Write-PodeJsonResponse -Value @{ name = $name; ok = $true }
 }
 
-Add-PodeRoute -Method Delete -Path '/api/secrets/:name' -ScriptBlock {
+Add-PodeRoute -Method Delete -Path '/api/secrets/:name' -EndpointName 'main' -ScriptBlock {
     $manifestFile = '__MANIFEST_PATH__'
     $vaultName = 'Strongbox'
     $name = $WebEvent.Parameters['name']
@@ -311,7 +314,7 @@ Add-PodeRoute -Method Delete -Path '/api/secrets/:name' -ScriptBlock {
     Write-PodeJsonResponse -Value @{ name = $name; ok = $true }
 }
 
-Add-PodeStaticRoute -Path '/' -Source '__PUBLIC_DIR__' -FileBrowser:$false
+Add-PodeStaticRoute -Path '/' -Source '__PUBLIC_DIR__' -EndpointName 'main' -FileBrowser:$false
 '@
 
 $serverScriptText = $serverScriptText.
