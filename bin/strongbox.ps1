@@ -28,8 +28,11 @@ strongbox <command> [args]
   check                            Drift check: manifest vs. vault
 
   get <name> [--real]               Print a secret's value to stdout (for scripting/piping)
-  set <name> <value> [--rotation-days N] [--owner X]
-                                    Write a secret
+  set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]
+                                    Write a secret. --scope project writes a project-scoped
+                                    secret that shadows any global one of the same name while
+                                    inside that project; --project defaults to the current repo
+                                    when not given
   remove <name> [--force]           Delete a secret (prompts for confirmation unless --force)
   reveal <name> [--stdout] [--real] Copy a secret to the clipboard (auto-clears after 30s);
                                     --stdout prints it instead, for cases where you truly need
@@ -184,12 +187,16 @@ switch ($Command) {
     'set' {
         $name = $Rest[0]
         $value = $Rest[1]
-        if (-not $name -or -not $value) { throw "Usage: strongbox set <name> <value> [--rotation-days N] [--owner X]" }
+        if (-not $name -or -not $value) { throw "Usage: strongbox set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]" }
         $params = @{ Name = $name; Value = $value }
         $rdIdx = [array]::IndexOf($Rest, '--rotation-days')
         if ($rdIdx -ge 0 -and $Rest.Count -gt $rdIdx + 1) { $params.RotationDays = [int]$Rest[$rdIdx + 1] }
         $ownerIdx = [array]::IndexOf($Rest, '--owner')
         if ($ownerIdx -ge 0 -and $Rest.Count -gt $ownerIdx + 1) { $params.Owner = $Rest[$ownerIdx + 1] }
+        $scopeIdx = [array]::IndexOf($Rest, '--scope')
+        if ($scopeIdx -ge 0 -and $Rest.Count -gt $scopeIdx + 1) { $params.Scope = $Rest[$scopeIdx + 1] }
+        $projectIdx = [array]::IndexOf($Rest, '--project')
+        if ($projectIdx -ge 0 -and $Rest.Count -gt $projectIdx + 1) { $params.Project = $Rest[$projectIdx + 1] }
         Set-StrongboxSecret @params
         Write-Host "Set '$name'."
     }

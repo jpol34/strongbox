@@ -107,7 +107,10 @@ strongbox stale [--json]                   List only secrets past their rotation
 strongbox check                            Drift check: manifest vs. vault
 
 strongbox get <name> [--real]               Print a secret's value to stdout (for scripting)
-strongbox set <name> <value> [--rotation-days N] [--owner X]
+strongbox set <name> <value> [--rotation-days N] [--owner X] [--scope project [--project X]]
+                                            --scope project writes a project-scoped secret that
+                                            shadows a global one of the same name inside that
+                                            project; --project defaults to the current repo
 strongbox remove <name> [--force]          Prompts for confirmation unless --force
 strongbox reveal <name> [--stdout] [--real] Copies to clipboard (auto-clears in 30s) by default;
                                              --stdout prints it instead
