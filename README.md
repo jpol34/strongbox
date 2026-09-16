@@ -11,8 +11,27 @@ a PFX-based cert (with `update-ca-certificates` for trust), `ss`, `/etc/hosts`, 
 `xclip`/`wl-copy`/`xsel` for clipboard support. Both branch from the same `$IsWindows`/`$IsLinux`
 checks at each call site - no separate codebases to keep in sync.
 
+## Get started with an AI coding agent
+
+If you're pointing an agent (Claude Code or otherwise) at a machine/repo where Strongbox is
+already set up, give it a prompt like this:
+
+> This machine uses Strongbox for secrets - a local vault (PowerShell module + CLI + web UI over
+> Microsoft.PowerShell.SecretManagement/SecretStore). Read its README.md in full before doing
+> anything with credentials. Source any secret you need via `strongbox get <name>` (or
+> `Get-StrongboxSecret -Name <name>` in PowerShell) instead of asking me to paste one in or
+> hardcoding it in a script. When you're only checking that a command works, use the sandbox
+> secret `tools.StrongboxSelfTest` instead of a real name - `get`/`reveal` refuse to return
+> anything else when run non-interactively unless `--real` is passed explicitly.
+
+That last point matters mechanically, not just as a convention: `get`/`reveal` genuinely block on
+any name but `tools.StrongboxSelfTest` when there's no real terminal attached (see
+[CLI](#cli)) - the agent needs to know that gate exists and why, rather than getting a confusing
+refusal partway through a task.
+
 ## Contents
 
+- [Get started with an AI coding agent](#get-started-with-an-ai-coding-agent)
 - [Features](#features)
 - [Quick start](#quick-start)
 - [PowerShell module](#powershell-module)
