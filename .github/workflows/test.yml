@@ -1,0 +1,26 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pester:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester and SecretManagement/SecretStore
+        shell: pwsh
+        run: |
+          Install-Module -Name Pester -MinimumVersion 5.0.0 -Force -SkipPublisherCheck -Scope CurrentUser
+          Install-Module -Name Microsoft.PowerShell.SecretManagement -Force -Scope CurrentUser
+          Install-Module -Name Microsoft.PowerShell.SecretStore -Force -Scope CurrentUser
+
+      - name: Run Pester tests
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.0.0
+          $result = Invoke-Pester -Path Tests/Strongbox.Tests.ps1 -PassThru
+          if ($result.FailedCount -gt 0) { exit 1 }
