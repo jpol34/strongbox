@@ -108,14 +108,19 @@ strongbox check                            Drift check: manifest vs. vault
 
 strongbox get <name> [--real]               Print a secret's value to stdout (for scripting)
 strongbox set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X]
-               [--scope project [--project X]]
+               [--scope project [--project X]] [--purpose "text"] [--used-by "text"]
                                             Omit <value> for a masked interactive prompt (no
                                             echo); '-' reads the value from stdin, for scripts;
                                             --from-clipboard reads it off the OS clipboard and
                                             clears it after (gated like get/reveal below).
                                             --scope project writes a project-scoped secret that
                                             shadows a global one of the same name inside that
-                                            project; --project defaults to the current repo
+                                            project; --project defaults to the current repo.
+                                            --purpose registers (or updates) this name's
+                                            manifest.json entry so it shows up in `list`/the web
+                                            UI - without it, the secret is written and gettable
+                                            but stays untracked; --used-by is recorded alongside
+                                            it and is a no-op without --purpose
 strongbox remove <name> [--force]          Prompts for confirmation unless --force
 strongbox reveal <name> [--stdout] [--real] Copies to clipboard (auto-clears in 30s) by default;
                                              --stdout prints it instead

@@ -43,7 +43,7 @@ strongbox <command> [args]
 
   get <name> [--real]               Print a secret's value to stdout (for scripting/piping)
   set <name> [<value>|-|--from-clipboard] [--rotation-days N] [--owner X]
-             [--scope project [--project X]]
+             [--scope project [--project X]] [--purpose "text"] [--used-by "text"]
                                     Write a secret. Omit <value> for a masked interactive prompt
                                     (no echo); pass '-' to read the value from stdin, for
                                     scripts; --from-clipboard reads it off the OS clipboard and
@@ -52,7 +52,11 @@ strongbox <command> [args]
                                     automated caller should silently grab). --scope project
                                     writes a project-scoped secret that shadows any global one of
                                     the same name while inside that project; --project defaults
-                                    to the current repo when not given
+                                    to the current repo when not given. --purpose registers (or
+                                    updates) this name's manifest.json entry so it shows up in
+                                    'list'/the web UI - omit it and the secret is still written
+                                    and gettable, just untracked; --used-by is recorded alongside
+                                    it and ignored without --purpose
   remove <name> [--force]           Delete a secret (prompts for confirmation unless --force)
   reveal <name> [--stdout] [--real] Copy a secret to the clipboard (auto-clears after 30s);
                                     --stdout prints it instead, for cases where you truly need
@@ -126,7 +130,7 @@ function Assert-InteractivePromptAllowed {
     Assert-StrongboxNonInteractiveGate -Name $Name -ArgList $ArgList -Verb 'prompt for'
 }
 
-$script:StrongboxSetFlagNames = '--rotation-days', '--owner', '--scope', '--project', '--from-clipboard'
+$script:StrongboxSetFlagNames = '--rotation-days', '--owner', '--scope', '--project', '--from-clipboard', '--purpose', '--used-by'
 
 function Test-StrongboxPositionalValueGiven {
     <#
@@ -408,6 +412,10 @@ switch ($Command) {
         if ($scopeIdx -ge 0 -and $Rest.Count -gt $scopeIdx + 1) { $params.Scope = $Rest[$scopeIdx + 1] }
         $projectIdx = [array]::IndexOf($Rest, '--project')
         if ($projectIdx -ge 0 -and $Rest.Count -gt $projectIdx + 1) { $params.Project = $Rest[$projectIdx + 1] }
+        $purposeIdx = [array]::IndexOf($Rest, '--purpose')
+        if ($purposeIdx -ge 0 -and $Rest.Count -gt $purposeIdx + 1) { $params.Purpose = $Rest[$purposeIdx + 1] }
+        $usedByIdx = [array]::IndexOf($Rest, '--used-by')
+        if ($usedByIdx -ge 0 -and $Rest.Count -gt $usedByIdx + 1) { $params.UsedBy = $Rest[$usedByIdx + 1] }
         Set-StrongboxSecret @params
         Write-Host "Set '$name'."
     }

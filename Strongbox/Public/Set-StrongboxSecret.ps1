@@ -8,6 +8,13 @@ function Set-StrongboxSecret {
     .PARAMETER Project
         The project slug for -Scope Project. Defaults to the current repo, resolved the same way
         Get/Remove-StrongboxSecret do, when not given.
+    .PARAMETER Purpose
+        When given, registers/updates this secret's manifest.json entry so it appears in
+        Get-StrongboxSecretList / the web UI. Omit to leave manifest.json untouched entirely -
+        the secret is still written and retrievable, just not listed, so a script writing an
+        ad-hoc secret doesn't silently become a tracked, UI-visible entry.
+    .PARAMETER UsedBy
+        Recorded alongside -Purpose in the manifest entry. Ignored if -Purpose is not given.
     #>
     param(
         [Parameter(Mandatory)][string] $Name,
@@ -15,7 +22,9 @@ function Set-StrongboxSecret {
         [string] $Owner,
         [int] $RotationDays,
         [ValidateSet('Global', 'Project')][string] $Scope = 'Global',
-        [string] $Project
+        [string] $Project,
+        [string] $Purpose,
+        [string] $UsedBy
     )
     Assert-StrongboxVault
 
@@ -32,4 +41,9 @@ function Set-StrongboxSecret {
     if ($Owner) { $metadata.Owner = $Owner }
     if ($RotationDays) { $metadata.RotationDays = $RotationDays }
     Set-SecretInfo -Name $internalName -Vault $script:StrongboxVaultName -Metadata $metadata
+
+    if ($Purpose) {
+        Set-StrongboxManifestEntry -Name $Name -Scope $Scope.ToLower() -Project $Project `
+            -Purpose $Purpose -UsedBy $UsedBy -RotationDays $RotationDays
+    }
 }
