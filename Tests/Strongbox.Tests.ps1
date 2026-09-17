@@ -59,6 +59,56 @@ Describe 'Set-StrongboxSecret' {
     }
 }
 
+Describe 'Set-StrongboxSecret -Purpose manifest registration' {
+    BeforeEach {
+        $manifestPath = Join-Path $TestDrive 'manifest.json'
+        '[]' | Set-Content -LiteralPath $manifestPath
+        Mock -ModuleName Strongbox Get-StrongboxManifestPath { $manifestPath }
+        Mock -ModuleName Strongbox Set-Secret { }
+        Mock -ModuleName Strongbox Set-SecretInfo { }
+    }
+
+    It 'does not touch manifest.json when -Purpose is not given' {
+        $before = Get-Content -LiteralPath $manifestPath -Raw
+        Set-StrongboxSecret -Name 'tools.Ad_Hoc' -Value 'abc'
+        (Get-Content -LiteralPath $manifestPath -Raw) | Should -Be $before
+    }
+
+    It 'creates a new manifest entry when -Purpose is given for an untracked name' {
+        Set-StrongboxSecret -Name 'tools.NewThing' -Value 'abc' -Purpose 'A new tool credential' -UsedBy 'Some MCP'
+
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+        $entry = $manifest | Where-Object newName -eq 'tools.NewThing'
+        $entry.purpose | Should -Be 'A new tool credential'
+        $entry.usedBy | Should -Be 'Some MCP'
+        $entry.status | Should -Be 'keep'
+    }
+
+    It 'updates purpose/usedBy on an existing manifest entry rather than duplicating it' {
+        @(
+            [pscustomobject]@{ oldName = 'A'; newName = 'tools.Existing'; usedBy = 'old user'; purpose = 'old purpose'; status = 'keep' }
+        ) | ConvertTo-Json | Set-Content -LiteralPath $manifestPath
+
+        Set-StrongboxSecret -Name 'tools.Existing' -Value 'xyz' -Purpose 'new purpose' -UsedBy 'new user'
+
+        $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
+        $manifest.Count | Should -Be 1
+        $manifest[0].purpose | Should -Be 'new purpose'
+        $manifest[0].usedBy | Should -Be 'new user'
+    }
+
+    It 'does not collide a project-scoped entry with a global entry sharing the same name' {
+        Mock -ModuleName Strongbox Resolve-StrongboxProjectScope { 'owner/myapp' }
+        Set-StrongboxSecret -Name 'tools.Shared' -Value 'g' -Purpose 'global one'
+        Set-StrongboxSecret -Name 'tools.Shared' -Value 'p' -Scope Project -Purpose 'project one'
+
+        $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
+        $manifest.Count | Should -Be 2
+        ($manifest | Where-Object { -not $_.scope }).purpose | Should -Be 'global one'
+        ($manifest | Where-Object { $_.scope -eq 'project' }).purpose | Should -Be 'project one'
+    }
+}
+
 Describe 'Remove-StrongboxSecret' {
     It 'calls Remove-Secret with the given name' {
         Mock -ModuleName Strongbox Remove-Secret { }
