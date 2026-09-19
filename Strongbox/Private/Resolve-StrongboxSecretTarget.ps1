@@ -1,34 +1,32 @@
 function Resolve-StrongboxSecretTarget {
     <#
     .SYNOPSIS
-        Resolves a logical secret name to the manifest-scoped entry that applies right now.
+        Resolves a logical secret name to the vault entry that applies right now.
     .DESCRIPTION
-        A project-scoped manifest entry named $Name shadows a global entry of the same name while
-        the caller is inside that entry's project; everywhere else (including when the manifest
-        has no matching entry at all, e.g. manifest.json doesn't exist yet) the global entry - or,
-        absent any manifest entry, the name itself unchanged - applies.
+        A project-scoped entry named $Name shadows a global entry of the same name while the
+        caller is inside that project, exactly like Set-StrongboxSecret's own doc describes -
+        checked by probing the vault directly for "$Name::<projectSlug>" (via Get-SecretInfo, no
+        decryption), so this works the moment Set-StrongboxSecret writes it, independent of the
+        cloud-sync manifest. The manifest (see Get-StrongboxManifestPath) only tracks what's been
+        synced; a purely local project-scoped secret that was never pushed/pulled has no manifest
+        entry at all, and previously fell back to global-only resolution and could never be
+        retrieved by its project-scoped name. Everywhere else (no project, or no project-scoped
+        entry in the vault) the global entry - or, absent any vault entry, the name itself
+        unchanged - applies.
     #>
     param(
         [Parameter(Mandatory)][string] $Name
     )
 
-    $manifest = @()
-    $manifestPath = Get-StrongboxManifestPath
-    if (Test-Path -LiteralPath $manifestPath) {
-        $manifest = @(Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json)
-    }
-
     $projectSlug = Resolve-StrongboxProjectScope
     if ($projectSlug) {
-        $projectEntry = $manifest | Where-Object {
-            $_.newName -eq $Name -and $_.scope -eq 'project' -and $_.project -eq $projectSlug -and
-            $_.status -in 'keep', 'keep-unverified'
-        } | Select-Object -First 1
-        if ($projectEntry) {
+        $projectInternalName = Resolve-StrongboxSecretStoreName -Name $Name -Scope 'project' -Project $projectSlug
+        $projectInfo = Get-SecretInfo -Name $projectInternalName -Vault $script:StrongboxVaultName -ErrorAction SilentlyContinue
+        if ($projectInfo) {
             return [pscustomobject]@{
                 Scope        = 'project'
                 Project      = $projectSlug
-                InternalName = Resolve-StrongboxSecretStoreName -Name $Name -Scope 'project' -Project $projectSlug
+                InternalName = $projectInternalName
             }
         }
     }
